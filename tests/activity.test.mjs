@@ -55,7 +55,7 @@ test('pause stops new dispatch; cancellation retains completed evidence', () => 
   const s = createState(); const completed = structuredClone(s.attempts.find(a => a.id === 'att-401'));
   const { attempt } = queueAttempt(s, 'job-104', 'span-p08'); toggleJob(s, 'job-104');
   assert.equal(settleAttempt(s, attempt.id, true).ok, false); assert.equal(settleAttempt(s, 'att-407', true).ok, true);
-  assert.equal(cancelJob(s, 'job-104'), true); assert.equal(attempt.state, 'Cancelled');
+  assert.equal(cancelJob(s, 'job-104'), true); assert.equal(attempt.state, 'Cancelled'); assert.equal(spanStatus(s, 'job-104', 'span-p07'), 'Cancelled');
   assert.deepEqual(s.attempts.find(a => a.id === completed.id), completed);
   assert.equal(queueAttempt(s, 'job-104', 'span-p04').ok, false);
 });

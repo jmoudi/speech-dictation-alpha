@@ -13,6 +13,7 @@ export function spanStatus(s, jobId, spanId) {
   const attempts = jobAttempts(s, jobId).filter(a => a.spanId === spanId);
   if (attempts.some(a => a.state === 'Succeeded')) return attempts.some(a => a.state === 'Failed') ? 'Recovered' : 'Succeeded';
   if (attempts.some(a => a.state === 'Running')) return 'Running';
+  if (s.jobs.find(j => j.id === jobId)?.state === 'Cancelled' && (!attempts.length || attempts.at(-1).state === 'Cancelled')) return 'Cancelled';
   const pendingSpan = s.spans.find(p => p.id === spanId);
   if (pendingSpan?.dependsOn.some(id => !jobAttempts(s, jobId).some(a => a.spanId === id && a.state === 'Succeeded'))) return 'Blocked';
   if (attempts.some(a => a.state === 'Queued')) return 'Queued';
