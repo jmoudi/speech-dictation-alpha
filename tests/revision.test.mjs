@@ -85,29 +85,30 @@ test('undo and document versions are independent for each dictation', () => {
   assert.equal(new Set(documentState(s).history.map(v => v.id)).size, documentState(s).history.length);
 });
 
-test('cleanup proposes guarded changes; editorial drafts preserve documents, evidence and primer inputs', () => {
+test('all corrector modes create suggestions and preserve documents, evidence and primer inputs', () => {
   const s = briefing(createState()), original = structuredClone(s.documents[s.dictationId]), source = structuredClone(s.dictations), evidence = structuredClone(s.attempts), context = structuredClone(compileContext(s));
   const cleanup = createRevision(s, 'cleanup'); assert.equal(cleanup.proposals, 1); assert.deepEqual(s.documents[s.dictationId], original);
   const c = s.changes.find(c => c.mode === 'cleanup'); assert.equal(reviewItems(s).find(i => i.changeId === c.id).risk.level, 'Low');
-  const editorial = createRevision(s, 'editorial'); assert.equal(editorial.draft.inputContext.revision_mode, 'editorial'); assert.equal(editorial.draft.inputContext.output, 'Derived document'); assert.equal(editorial.draft.changed, 1); assert.notEqual(editorial.draft.blocks[0].text, original[0].text);
+  const editorial = createRevision(s, 'editorial'); assert.equal(editorial.proposals, 1); assert.equal(documentState(s).derived.length, 0);
+  const proposal = s.changes.find(c => c.mode === 'editorial'); assert.equal(proposal.inputContext.output, 'Review proposals');
   assert.deepEqual(s.documents[s.dictationId], original); assert.deepEqual(s.dictations, source); assert.deepEqual(s.attempts, evidence); assert.deepEqual(compileContext(s), context);
-  s.primer.topic = 'Changed after request'; assert.notEqual(editorial.draft.inputContext.topic, s.primer.topic);
-  editorial.draft.blocks[0].text = 'Human draft edit'; assert.deepEqual(s.documents[s.dictationId], original);
+  s.primer.topic = 'Changed after request'; assert.notEqual(proposal.inputContext.topic, s.primer.topic);
   assert.equal(applyChange(s, c.id).ok, true); assert.doesNotMatch(s.documents[s.dictationId][0].text, /Um,|Uh,/);
-  assert.equal(s.documents[s.dictationId][0].provenance.kind, 'Cleanup');
+  assert.equal(s.documents[s.dictationId][0].provenance.kind, 'Cleanup'); assert.equal(s.documents[s.dictationId][0].provenance.acceptedBy, 'Human');
+  assert.equal(applyChange(s, proposal.id).ok, false);
 });
 
-test('manual edits prevent cleanup and editorial fixture rewrites', () => {
+test('manual edits prevent cleanup and editorial proposals for protected passages', () => {
   const s = briefing(createState()); snapshotEdit(s); s.editedBlocks.add('brief-1'); s.documents[s.dictationId][0].text = 'Human-authored wording'; commitDocument(s, s.dictationId, 'Manual edit', 'Test edit');
-  assert.equal(createRevision(s, 'cleanup').proposals, 0);
-  const draft = createRevision(s, 'editorial').draft; assert.equal(draft.changed, 0); assert.equal(draft.blocks[0].text, 'Human-authored wording');
+  assert.equal(createRevision(s, 'cleanup').proposals, 0); assert.equal(createRevision(s, 'editorial').proposals, 0);
+  assert.equal(s.documents[s.dictationId][0].text, 'Human-authored wording');
 });
 
-test('review, assembly, derived drafts and provenance render with escaped content', () => {
+test('review, assembly, correction and provenance panels render with escaped content', () => {
   const s = briefing(createState()); buildAssembly(s); s.page = 'review';
   assert.match(renderApp(s), /Semantic review/); assert.match(renderApp(s), /Choose source & propose update/);
-  const draft = createRevision(s, 'editorial').draft; draft.blocks[0].text = '<script>unsafe</script>';
+  createRevision(s, 'editorial'); s.changes.find(c => c.mode === 'editorial').after = '<script>unsafe</script>';
+  s.reviewScope = s.dictationId; s.selectedReviewId = 'change:' + s.changes.find(c => c.mode === 'editorial').id;
+  assert.match(renderApp(s), /&lt;script&gt;/); assert.ok(!renderApp(s).includes('<script>unsafe'));
   for (const dialog of ['assembly', 'revisions', 'provenance']) { s.modal = dialog; s.selectedBlockId = 'brief-1'; assert.match(modal(s), /role="dialog"/); }
-  s.page = 'studio'; s.documentMode = 'derived'; assert.match(renderApp(s), /&lt;script&gt;/); assert.ok(!renderApp(s).includes('<script>unsafe'));
-  s.modal = 'export'; assert.match(modal(s), /Editorial draft 1/);
 });

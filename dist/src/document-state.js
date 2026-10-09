@@ -43,8 +43,8 @@ export function applyChange(s, id) {
   if (!b || !b.text.includes(c.before) || c.baseText && b.text !== c.baseText || s.editedBlocks.has(b.id)) { journal(s, c.dictationId, 'Revision proposal', 'Blocked', 'Base text changed or the passage has a manual edit.', { proposalId: id }); return { ok: false, reason: 'This passage was edited. Your text is protected; rebuild the proposal.' }; }
   snapshotEdit(s, c.dictationId); b.text = b.text.replace(c.before, c.after); b.revised = true;
   const ids = c.evidence.map(key => s.requests.find(r => r.id === key)?.attemptId || key).filter(key => s.attempts.some(a => a.id === key));
-  b.provenance = { ...b.provenance, kind: c.mode === 'cleanup' ? 'Cleanup' : 'Recognition repair', proposalId: id, model: c.model, attemptIds: [...new Set([...(b.provenance?.attemptIds || []), ...ids])] };
-  c.state = 'accepted'; commitDocument(s, c.dictationId, c.mode === 'cleanup' ? 'Cleanup' : 'Recognition repair', c.title, { proposalId: id, attemptIds: ids }); return { ok: true };
+  b.provenance = { ...b.provenance, kind: c.mode === 'cleanup' ? 'Cleanup' : c.mode === 'editorial' ? 'Editorial suggestion' : 'Recognition repair', proposalId: id, acceptedBy: 'Human', profileSnapshot: c.profileSnapshot, model: c.model, attemptIds: [...new Set([...(b.provenance?.attemptIds || []), ...ids])] };
+  c.state = 'accepted'; commitDocument(s, c.dictationId, c.mode === 'cleanup' ? 'Cleanup' : c.mode === 'editorial' ? 'Editorial suggestion' : 'Recognition repair', c.title, { proposalId: id, attemptIds: ids }); return { ok: true };
 }
 export function recordManualRevision(s, dictationId, blockId) {
   const ds = documentState(s, dictationId), b = s.documents[dictationId]?.find(b => b.id === blockId); if (!b) return;

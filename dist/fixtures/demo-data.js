@@ -1,3 +1,4 @@
+import { addProfileFixtures } from './profile-data.js';
 import { addRevisionFixtures } from './revision-data.js';
 import { createActivityFixtures, POLITICAL_DICTATION, POLITICAL_PRIMER } from './activity-data.js';
 /**
@@ -78,7 +79,7 @@ const models = [
   { role: 'Topic primer', name: 'gpt-4.1-mini', purpose: 'Local topic + proposed terms', icon: 'compass', note: 'Background refresh · never blocks ASR', details: { input: 'Recognition transcript + confirmed terms', output: 'Versioned topic and term proposals', scope: 'Current recording and topic', learning: 'Explicit confirmation for new terms' } }
 ];
 
-export const DEMO_SETTINGS = { asrModel: 'gpt-transcribe', strategy: 'growing', correctorModel: 'gpt-4.1-mini', primerModel: 'gpt-4.1-mini', profile: 'Light cleanup', contextPolicy: 'Latest available', targetSeconds: 8, windowSeconds: 30, concurrency: 3, autoApply: false, showAnnotations: true, followPlayback: true, theme: 'light', fontSize: 'comfortable', device: 'MacBook Pro Microphone', noiseSuppression: true, echoCancellation: true };
+export const DEMO_SETTINGS = { asrModel: 'gpt-transcribe', strategy: 'growing', correctorModel: 'gpt-4.1-mini', primerModel: 'gpt-4.1-mini', profile: 'Light cleanup', contextPolicy: 'Latest available', targetSeconds: 8, windowSeconds: 30, concurrency: 3, showAnnotations: true, followPlayback: true, theme: 'light', fontSize: 'comfortable', device: 'MacBook Pro Microphone', noiseSuppression: true, echoCancellation: true };
 
 export const LIVE_EXAMPLE = { id: 'live-demo', title: 'Untitled recording', date: 'Just now', group: 'Today', duration: 0, type: 'Microphone', language: 'English', tags: [], status: 'Recording', waveform: waveform(12), markers: [], blocks: [], phrases: ['Let’s start with the experience.', 'The document should feel calm, even while several recognition requests are running in the background.', 'I want the details to be available when I need them, without making the writing surface feel like a dashboard.'] };
 export const IMPORT_EXAMPLE = { name: 'Product strategy workshop.m4a', duration: 7200, size: '86.4 MB', format: 'M4A', parts: 20 };
@@ -94,7 +95,7 @@ export function createDemoData() {
   data.dictations.unshift(structuredClone(POLITICAL_DICTATION));
   data.primers.political = structuredClone(POLITICAL_PRIMER);
   Object.assign(data, createActivityFixtures(data));
-  addRevisionFixtures(data);
+  addRevisionFixtures(data); addProfileFixtures(data);
   return data;
 }
 

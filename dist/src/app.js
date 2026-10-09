@@ -1,8 +1,9 @@
+import { assignProfile, selectedProfile, profileContext, editProfile, saveProfile, cloneProfile, startRecognition, retryRecognition } from './profile-store.js';
 import { documentState, journal, recordManualRevision } from './document-state.js';
 import { buildAssembly, applyAssemblyStep, applyReadyAssembly, createRevision, currentDerived, reviewItems, chooseReviewEvidence } from './revision-store.js';
 import { comparisonPair, preferAttempt, gapExecution } from './evidence.js';
 import { selectJob, selectSpan, queueAttempt, retryFailed, settleAttempt, cancelJob, toggleJob, createJob, visibleJobs, registerRequest, dispatchReady } from './activity-store.js';
-import { createState, currentDictation, currentBlocks, pendingChanges, applyChange, undoEdit, snapshotEdit, setModel, compileContext, wordCount, time } from './store.js';
+import { createState, escapeHtml, currentDictation, currentBlocks, pendingChanges, applyChange, undoEdit, snapshotEdit, setModel, compileContext, wordCount, time } from './store.js';
 import { renderApp, transport, modal as modalView } from './views.js';
 import { LIVE_EXAMPLE, IMPORT_EXAMPLE, SIMULATION, NEW_PRIMER_TOPIC } from '../fixtures/demo-data.js';
 
@@ -28,7 +29,7 @@ function focusKey(el) {
 }
 function render({ preserveScroll = true } = {}) {
   const focus = root.contains(document.activeElement) ? focusKey(document.activeElement) : null;
-  const scrolls = preserveScroll ? [...root.querySelectorAll('.document-scroll,.inspector-scroll,.recording-list,.job-detail-scroll,.job-list,.attempt-inspector-body,.review-list,.review-detail-scroll')].map(el => [el.className, el.scrollTop]) : [];
+  const scrolls = preserveScroll ? [...root.querySelectorAll('.document-scroll,.inspector-scroll,.recording-list,.job-detail-scroll,.job-list,.attempt-inspector-body,.review-list,.review-detail-scroll,.dictation-hub-scroll')].map(el => [el.className, el.scrollTop]) : [];
   root.innerHTML = renderApp(state);
   document.body.classList.toggle('theme-dark', state.settings.theme === 'dark');
   document.body.classList.toggle('text-large', state.settings.fontSize === 'large');
@@ -57,11 +58,21 @@ function openModal(name, settingsTab) {
 function closeModal() { state.modal = null; renderModal(); if (lastFocus?.isConnected) lastFocus.focus(); else root.querySelector('[data-action=settings]')?.focus(); }
 function showInspector(tab) { state.inspector = tab; state.inspectorOpen = true; state.focusMode = false; }
 function selectSource(id) {
-  if (state.recording && id !== state.dictationId) { toast('Stop the recording preview before switching sources.'); return; }
+  if (state.recording && id !== state.dictationId) { toast('Stop the recording preview before switching sources.'); return false; }
   state.documentMode = 'working'; state.playbackRange = null; state.dictationId = id; state.page = 'studio'; state.position = 0; state.playing = false; state.selectedBlockId = null; state.sidebarOpen = false; state.contextRequestId = null;
   state.requestId = state.requests.find(r => r.dictationId === id)?.id || null;
-  state.primer = state.primers[id] || state.primer; state.selectedDerivedId = documentState(state).derived.at(-1)?.id || null;
-  render({ preserveScroll: false });
+  state.primer = state.primers[id] || state.primer; state.selectedDerivedId = documentState(state).derived.at(-1)?.id || null; assignProfile(state, 'recognizer', selectedProfile(state, 'recognizer').id); assignProfile(state, 'corrector', selectedProfile(state, 'corrector').id);
+  render({ preserveScroll: false }); return true;
+}
+function openDictation(id = state.dictationId, tab = 'overview') {
+  if (id !== state.dictationId && !selectSource(id)) return false;
+  state.page = 'dictation'; state.dictationTab = tab; state.playing = false; state.sidebarOpen = false; render({ preserveScroll: false }); return true;
+}
+function updateRecognitionPreview() {
+  const p = state.profiles.find(p => p.id === modalRoot.querySelector('#run-profile')?.value); if (!p) return;
+  const live = p.model === 'gpt-live-transcribe'; modalRoot.querySelector('[data-action=confirm-recognition]').disabled = live || !currentDictation(state).duration;
+  modalRoot.querySelector('#run-input-preview').textContent = live ? 'Native live profiles are used during live capture. Select a bounded profile for this retained recording.' : `${p.name} v${p.version} and primer v${state.primer.version} will be frozen. Results are recognition evidence.`;
+  modalRoot.querySelector('#run-profile-preview').innerHTML = `<pre class="code-block">${escapeHtml(JSON.stringify(profileContext(state, p), null, 2))}</pre>`;
 }
 function scrollToBlock(id) { requestAnimationFrame(() => root.querySelector(`[data-block="${CSS.escape(id)}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })); }
 function setPosition(value) { state.playbackRange = null; const r = currentDictation(state); state.position = Math.max(0, Math.min(r.duration, value)); updateTransport(); }
@@ -93,7 +104,7 @@ function stopRecording() {
 function addSimulatedRequest(r, input, options = {}) {
   const context = options.context || compileContext(state);
   const id = 'demo-' + String(state.requests.length + 1).padStart(3, '0');
-  const request = { id, dictationId: r.id, kind: 'Recognition', model: options.model || state.settings.asrModel, purpose: options.purpose || 'Simulated window', status: 'Complete', input, target: input, duration: `${(input[1] - input[0]).toFixed(1)} s`, latency: SIMULATION.requestLatency, format: SIMULATION.requestFormat, bytes: SIMULATION.requestBytes, created: new Date().toLocaleTimeString([], { hour12: false }), contextVersion: options.contextVersion ?? state.primer.version, prompt: context.prompt, keywords: context.keywords || [], text: options.text || currentBlocks(state).map(b => b.text).join(' ') || SIMULATION.repairedText, params: { model: options.model || state.settings.asrModel, response_format: 'json', stream: true, simulated: true }, events: [{ time: '+0 ms', event: 'Simulated request queued' }, { time: '+42 ms', event: 'Fixture audio associated' }, { time: '+1,620 ms', event: 'Illustrative result stored' }] };
+  const request = { profileSnapshot: structuredClone(selectedProfile(state, 'recognizer')), id, dictationId: r.id, kind: 'Recognition', model: options.model || state.settings.asrModel, purpose: options.purpose || 'Simulated window', status: 'Complete', input, target: input, duration: `${(input[1] - input[0]).toFixed(1)} s`, latency: SIMULATION.requestLatency, format: SIMULATION.requestFormat, bytes: SIMULATION.requestBytes, created: new Date().toLocaleTimeString([], { hour12: false }), contextVersion: options.contextVersion ?? state.primer.version, prompt: context.prompt, keywords: context.keywords || [], text: options.text || currentBlocks(state).map(b => b.text).join(' ') || SIMULATION.repairedText, params: { model: options.model || state.settings.asrModel, response_format: 'json', stream: true, simulated: true }, events: [{ time: '+0 ms', event: 'Simulated request queued' }, { time: '+42 ms', event: 'Fixture audio associated' }, { time: '+1,620 ms', event: 'Illustrative result stored' }] };
   state.requests.unshift(request); registerRequest(state, request); state.requestId = id; return request;
 }
 
@@ -118,23 +129,37 @@ function exportData() {
 
 function action(name, el) {
   const id = el?.dataset.id, value = el?.dataset.value;
+  const executionActions = ['dispatch-ready', 'activity-toggle-job', 'cancel-job', 'retry-failed', 'attempt-success', 'attempt-failure', 'queue-attempt', 'expand-attempt', 'configure-attempt', 'section-recognition', 'dictation-retry'];
+  if (executionActions.includes(name)) { const owner = name === 'section-recognition' ? null : state.jobs.find(j => j.id === (el?.dataset.job || state.attempts.find(a => a.id === id)?.jobId || (state.jobs.some(j => j.id === id) ? id : state.selectedJobId))); if (state.page !== 'dictation' || owner && owner.dictationId !== state.dictationId) { toast('Open this dictation to control its recognition pipeline.'); return; } }
   switch (name) {
     case 'activity-reference': { if (state.modal) closeModal(); const a = state.attempts.find(a => a.id === id); if (a) { selectJob(state, a.jobId); selectSpan(state, a.spanId); state.selectedAttemptId = a.id; state.activityInspectorOpen = true; state.page = 'jobs'; state.jobFilter = 'All'; state.jobDictationFilter = 'all'; state.jobQuery = ''; state.activityTab = 'spans'; render(); } break; }
     case 'toggle-activity-inspector': state.activityInspectorOpen = !state.activityInspectorOpen; render(); break;
     case 'compare-span': selectSpan(state, id); state.activityTab = 'compare'; render(); break;
     case 'prefer-evidence': { const result = preferAttempt(state, id); render(); toast(result.ok ? 'Preferred evidence recorded. Review document edits separately.' : result.reason); break; }
-    case 'configure-attempt': state.retrySpanId = id; openModal('retry-attempt'); break;
-    case 'confirm-attempt': { const get = id => modalRoot.querySelector('#' + id).value; const custom = get('attempt-audio') === 'custom'; const result = queueAttempt(state, state.selectedJobId, state.retrySpanId, { model: get('attempt-model'), currentContext: get('attempt-context') === 'current', ...(custom ? { before: Number(get('attempt-before')), after: Number(get('attempt-after')) } : {}) }); if (!result.ok) { toast(result.reason); break; } closeModal(); state.activityTab = 'spans'; state.activityInspectorOpen = true; render(); toast('Attempt queued with its own audio input and frozen context.'); break; }
+    case 'configure-attempt': if (state.page !== 'dictation') break; state.retrySpanId = id; openModal('retry-attempt'); break;
+    case 'confirm-attempt': { const get = id => modalRoot.querySelector('#' + id).value; const custom = get('attempt-audio') === 'custom'; const result = retryRecognition(state, state.selectedJobId, state.retrySpanId, { useOriginal: get('attempt-config') === 'original', profileId: get('attempt-profile'), custom, ...(custom ? { before: Number(get('attempt-before')), after: Number(get('attempt-after')) } : {}) }); if (!result.ok) { toast(result.reason); break; } closeModal(); state.dictationTab = 'advanced'; render(); toast('Attempt queued with its own audio input and frozen run configuration.'); break; }
     case 'dispatch-ready': { const result = dispatchReady(state, id); state.activityInspectorOpen = true; render(); toast(`${result.started} attempts dispatched; ${result.queued} newly queued. Concurrency and dependencies enforced.`); break; }
-    case 'inspect-gap': { const range = [Number(el.dataset.start), Number(el.dataset.end)]; const result = gapExecution(state, state.dictationId, range); if (result.attempt) { action('activity-reference', { dataset: { id: result.attempt.id } }); } else if (result.span) { const job = state.jobs.find(j => j.spanIds.includes(result.span.id)); selectJob(state, job.id); selectSpan(state, result.span.id); state.page = 'jobs'; state.jobDictationFilter = 'all'; state.jobFilter = 'All'; state.jobQuery = ''; render(); } else { openModal('new-job'); modalRoot.querySelector('#job-dictation').value = state.dictationId; modalRoot.querySelector('#job-start').value = range[0]; modalRoot.querySelector('#job-end').value = range[1]; modalRoot.querySelector('#job-plan').value = 'single'; modalRoot.querySelector('#job-parts').disabled = true; } break; }
+    case 'inspect-gap': { const range = [Number(el.dataset.start), Number(el.dataset.end)], result = gapExecution(state, state.dictationId, range); if (result.attempt) action('activity-reference', { dataset: { id: result.attempt.id } }); else { openDictation(state.dictationId, 'advanced'); const tool = root.querySelector('.section-rerun'); if (tool) { tool.open = true; root.querySelector('#section-start').value = range[0]; root.querySelector('#section-end').value = range[1]; tool.scrollIntoView({ block: 'start' }); } } break; }
     case 'activity-job': selectJob(state, id); render(); break;
     case 'activity-span': selectSpan(state, id); state.activityTab = 'spans'; render(); break;
     case 'activity-attempt': { const a = state.attempts.find(a => a.id === id); state.selectedAttemptId = id; state.selectedSpanId = a.spanId; state.activityInspectorOpen = true; render(); break; }
     case 'activity-tab': state.activityTab = value; render(); break;
     case 'attempt-tab': state.attemptTab = value; render(); break;
     case 'dictation-jobs': state.page = 'jobs'; state.jobDictationFilter = state.dictationId; state.jobFilter = 'All'; state.jobQuery = ''; selectJob(state, state.jobs.find(j => j.dictationId === state.dictationId)?.id); render(); break;
-    case 'new-job': openModal('new-job'); break;
-    case 'create-job': { const get = id => modalRoot.querySelector('#' + id).value; const result = createJob(state, { dictationId: get('job-dictation'), start: Number(get('job-start')), end: Number(get('job-end')), parts: get('job-plan') === 'single' ? 1 : Number(get('job-parts')), model: get('job-model'), contextPolicy: get('job-context'), output: get('job-output') }); if (!result.ok) { toast(result.reason); break; } state.page = 'jobs'; state.jobFilter = 'All'; state.jobDictationFilter = 'all'; state.jobQuery = ''; closeModal(); render(); toast('Job created. Queue attempts from its audio spans.'); break; }
+    case 'open-dictation': if (state.modal) closeModal(); openDictation(id || state.dictationId); break;
+    case 'edit-document': state.page = 'studio'; state.playing = false; state.documentMode = 'working'; render({ preserveScroll: false }); break;
+    case 'dictation-tab': state.dictationTab = value; render({ preserveScroll: false }); break;
+    case 'dictation-inspect-job': selectJob(state, id); state.activityTab = 'pipeline'; state.page = 'jobs'; state.jobDictationFilter = 'all'; state.jobFilter = 'All'; state.jobQuery = ''; render(); break;
+    case 'new-recognition': if (state.recording) { toast('Stop the capture preview before starting recorded-audio recognition.'); break; } if (state.page !== 'dictation') openDictation(); openModal('recognition-run'); updateRecognitionPreview(); break;
+    case 'confirm-recognition': { const get = id => modalRoot.querySelector('#' + id).value, plan = get('run-plan'); const result = startRecognition(state, { profileId: get('run-profile'), plan, parts: plan === 'single' ? 1 : Number(get('run-parts')) }); if (!result.ok) { toast(result.reason); break; } closeModal(); state.dictationTab = 'audio'; render(); toast('Recognition preview started with a frozen profile. Inspect its pipeline in Activity.'); break; }
+    case 'section-recognition': { const get = id => root.querySelector('#' + id).value; const result = startRecognition(state, { profileId: get('section-profile'), start: Number(get('section-start')), end: Number(get('section-end')), parts: 1, section: true, before: Number(get('section-before')), after: Number(get('section-after')) }); if (result.ok) render(); toast(result.ok ? 'Section recognition preview started. Earlier evidence and document text retained.' : result.reason); break; }
+    case 'dictation-retry': selectJob(state, el.dataset.job); state.retrySpanId = id; openModal('retry-attempt'); break;
+    case 'dictation-preview': state.page = 'studio'; render(); toast('Visual timeline preview; no sample audio is included.'); break;
+    case 'dictation-context-editor': state.page = 'studio'; showInspector('context'); state.contextTab = 'primer'; render(); break;
+    case 'dictation-suggest': if (state.recording) { toast('Stop the capture preview before generating correction proposals.'); break; } openDictation(state.dictationId, 'documents'); state.revisionMode = selectedProfile(state, 'corrector').mode; openModal('revisions'); break;
+    case 'edit-profile': editProfile(state, id); openModal('settings', 'profiles'); break;
+    case 'clone-profile': cloneProfile(state, id); renderModal(); break;
+    case 'save-profile': { const get = id => modalRoot.querySelector('#' + id), p = state.profileDraft; const result = saveProfile(state, { ...p, name: get('profile-name').value, prompt: get('profile-prompt').value, model: get('profile-model').value, includePrimer: get('profile-primer').checked, mode: get('profile-mode')?.value || null }); if (result.ok) render(); toast(result.ok ? `Saved ${result.profile.name} v${result.profile.version}. Existing run snapshots retained.` : result.reason); break; }
     case 'queue-attempt': case 'expand-attempt': { const result = queueAttempt(state, state.selectedJobId, id, { expanded: name === 'expand-attempt', currentContext: name === 'expand-attempt' }); render(); toast(result.ok ? 'Attempt queued. Earlier attempts and the document are unchanged.' : result.reason); break; }
     case 'retry-failed': { const count = retryFailed(state, id); render(); toast(`Queued ${count} retry attempt${count === 1 ? '' : 's'}.`); break; }
     case 'attempt-success': case 'attempt-failure': { const result = settleAttempt(state, id, name === 'attempt-success'); render(); toast(result.ok ? 'Simulated response stored as evidence. Document unchanged.' : result.reason); break; }
@@ -156,13 +181,13 @@ function action(name, el) {
     case 'apply-assembly-step': { const result = applyAssemblyStep(state, state.selectedAssemblyId, id); render(); toast(result.ok ? 'Passage applied. Source evidence retained.' : result.reason); break; }
     case 'apply-ready-assembly': { const result = applyReadyAssembly(state, state.selectedAssemblyId); render(); toast(result.ok ? `Applied ${result.applied} ready passages. Blocked spans remain for review.` : result.reason); break; }
     case 'open-span-review': closeModal(); state.page = 'review'; state.reviewFilter = 'Pending'; state.reviewScope = 'all'; state.reviewRisk = 'All'; state.reviewSearch = ''; state.selectedReviewId = 'span:' + id; render(); break;
-    case 'revisions': if (state.recording) { toast('Stop the capture preview before generating document revisions.'); break; } openModal('revisions'); break;
-    case 'revision-mode': state.revisionMode = value; renderModal(); break;
-    case 'generate-revision': { const result = createRevision(state, state.revisionMode); closeModal(); if (result.draft) { state.documentMode = 'derived'; state.page = 'studio'; render(); toast(`Created a separate editorial draft with ${result.draft.changed} fixture rewrites.`); } else { state.reviewScope = state.dictationId; state.reviewFilter = 'Pending'; state.reviewRisk = 'All'; state.reviewSearch = ''; state.page = 'review'; render(); toast(`${result.proposals} ${result.mode} proposals available for review.`); } break; }
+    case 'revisions': if (state.page !== 'dictation') openDictation(state.dictationId, 'documents'); state.revisionMode = selectedProfile(state, 'corrector').mode; if (state.recording) { toast('Stop the capture preview before generating document revisions.'); break; } openModal('revisions'); break;
+    case 'revision-mode': { const p = state.profiles.find(p => p.kind === 'corrector' && p.mode === value); if (p) assignProfile(state, 'corrector', p.id); state.revisionMode = value; renderModal(); break; }
+    case 'generate-revision': { const result = createRevision(state, state.revisionMode); closeModal(); state.reviewScope = state.dictationId; state.reviewFilter = 'Pending'; state.reviewRisk = 'All'; state.reviewSearch = ''; state.page = 'review'; render(); toast(`${result.proposals} ${result.mode} proposals available. Document text is unchanged.`); break; }
     case 'open-derived': state.selectedDerivedId = id; state.documentMode = 'derived'; state.page = 'studio'; closeModal(); render(); break;
     case 'provenance': state.selectedBlockId = id; openModal('provenance'); break;
-    case 'settings': openModal('settings', el.dataset.settingsTab); break;
-    case 'settings-tab': state.settingsTab = value; renderModal(); break;
+    case 'settings': if ((el.dataset.settingsTab || state.settingsTab) === 'profiles') editProfile(state, state.profileEditorId); openModal('settings', el.dataset.settingsTab); break;
+    case 'settings-tab': state.settingsTab = value; if (value === 'profiles') editProfile(state, state.profileEditorId); renderModal(); break;
     case 'theme': state.settings.theme = value; render(); modalRoot.querySelector(`[data-action=theme][data-value=${value}]`)?.focus(); break;
     case 'close-modal': closeModal(); break;
     case 'export': openModal('export'); break;
@@ -192,7 +217,7 @@ function action(name, el) {
     case 'dismiss-change': { const c = state.changes.find(c => c.id === id); if (!c || c.state !== 'pending') break; snapshotEdit(state, c.dictationId); c.state = 'dismissed'; journal(state, c.dictationId, 'Revision review', 'Kept current text', c.title, { proposalId: id }); render(); toast('Kept your original wording.'); break; }
     case 'undo': if (state.documentMode !== 'working') { toast('Switch to the working document to undo its changes.'); break; } if (undoEdit(state)) { render(); toast('Last document change undone.'); } else toast('No document edits to undo.'); break;
     case 'change-filter': state.changeFilter = value; render(); break;
-    case 'evidence': { state.requestId = id; state.requestTab = 'details'; showInspector('recognition'); const r = state.requests.find(q => q.id === id); state.position = r.input[0]; render(); break; }
+    case 'evidence': { if (!state.requests.some(q => q.id === id) && state.attempts.some(a => a.id === id)) { action('activity-reference', { dataset: { id } }); break; } state.requestId = id; state.requestTab = 'details'; showInspector('recognition'); const r = state.requests.find(q => q.id === id); if (r) state.position = r.input[0]; render(); break; }
     case 'request-tab': state.requestTab = value; render(); break;
     case 'request-context': state.contextRequestId = id; showInspector('context'); render(); break;
     case 'current-context': state.contextRequestId = null; render(); break;
@@ -214,10 +239,10 @@ function action(name, el) {
     case 'loop': state.loop = !state.loop; render(); toast(state.loop ? 'Looping the selected passage in the visual preview.' : 'Loop disabled.'); break;
     case 'volume': toast('This is a visual transport mock-up. No audio is played or recorded.'); break;
     case 'marker': { const r = currentDictation(state); const pos = state.recording ? state.captureSeconds : state.position; r.markers.push({ time: pos, label: 'Marker ' + (r.markers.length + 1) }); render(); toast('Marker added at ' + time(pos)); break; }
-    case 'play-request': { const r = state.requests.find(q => q.id === id); state.position = r.input[0]; state.playbackRange = [...r.input]; state.playing = true; render(); toast('Previewing the submitted range visually; no sample audio is included.'); break; }
-    case 'rerun': state.requestId = id; openModal('rerun'); break;
+    case 'play-request': { const r = state.requests.find(q => q.id === id); if (r) state.position = r.input[0]; state.playbackRange = [...r.input]; state.playing = true; render(); toast('Previewing the submitted range visually; no sample audio is included.'); break; }
+    case 'rerun': { const r = state.requests.find(q => q.id === id); if (!r || !openDictation(r.dictationId, 'advanced')) break; const tool = root.querySelector('.section-rerun'); tool.open = true; root.querySelector('#section-start').value = r.target[0]; root.querySelector('#section-end').value = r.target[1]; tool.scrollIntoView({ block: 'start' }); break; }
     case 'confirm-rerun': { const original = state.requests.find(q => q.id === state.requestId); const model = modalRoot.querySelector('#rerun-model').value; const useOriginal = modalRoot.querySelector('#rerun-context').value === 'original'; const context = useOriginal ? model === 'gpt-4o-transcribe' ? { prompt: original.prompt + (original.keywords?.length ? '\n\nRelevant terms: ' + original.keywords.join(', ') : '') } : { prompt: original.prompt, keywords: [...original.keywords] } : compileContext({ ...state, settings: { ...state.settings, asrModel: model } }); addSimulatedRequest(currentDictation(state), [...original.input], { model, context, contextVersion: useOriginal ? original.contextVersion : state.primer.version, text: original.text, purpose: 'Manual comparison · simulated' }); closeModal(); state.requestTab = 'response'; render(); toast('Added an independent simulated result. Earlier evidence is unchanged.'); break; }
-    case 'simulate-request': { const r = currentDictation(state); addSimulatedRequest(r, [0, Math.min(r.duration || 30, 30)]); render(); toast('Added an illustrative recognition result.'); break; }
+    case 'simulate-request': openDictation(state.dictationId, 'audio'); openModal('recognition-run'); updateRecognitionPreview(); break;
     case 'reset-demo': state = createState(); importedFileName = ''; render({ preserveScroll: false }); toast('Sample workspace reset.'); break;
   }
 }
@@ -233,7 +258,8 @@ document.addEventListener('focusin', ev => { if (ev.target.matches('[data-edit-b
 document.addEventListener('focusout', ev => { const el = ev.target; if (el.matches('[data-edit-block][contenteditable]') && el.dataset.snapshotted && el.dataset.before !== el.textContent) { if (state.documentMode === 'derived') journal(state, state.dictationId, 'Derived draft edit', 'Applied', `Edited ${el.dataset.editBlock} in ${currentDerived(state)?.name}.`); else recordManualRevision(state, state.dictationId, el.dataset.editBlock); el.dataset.snapshotted = ''; } });
 document.addEventListener('input', ev => {
   const el = ev.target;
-  if (['attempt-before', 'attempt-after'].includes(el.id)) { updateRetryPreview(); }
+  if (el.closest('.settings-content') && ['profile-name', 'profile-prompt', 'profile-model', 'profile-primer', 'profile-mode'].includes(el.id)) { const p = state.profileDraft; if (p) { const key = { 'profile-name': 'name', 'profile-prompt': 'prompt', 'profile-model': 'model', 'profile-primer': 'includePrimer', 'profile-mode': 'mode' }[el.id]; p[key] = el.type === 'checkbox' ? el.checked : el.value; } }
+  else if (['attempt-before', 'attempt-after'].includes(el.id)) { updateRetryPreview(); }
   else if (el.id === 'job-search') { const pos = el.selectionStart; state.jobQuery = el.value; const jobs = visibleJobs(state); if (!jobs.some(j => j.id === state.selectedJobId)) selectJob(state, jobs[0]?.id); render(); const next = root.querySelector('#job-search'); next.focus(); next.setSelectionRange(pos, pos); }
   else if (el.id === 'review-search') { const pos = el.selectionStart; state.reviewSearch = el.value; render(); const next = root.querySelector('#review-search'); next.focus(); next.setSelectionRange(pos, pos); }
   else if (el.id === 'library-search') { const pos = el.selectionStart; state.libraryQuery = el.value; render(); const next = root.querySelector('#library-search'); next.focus(); next.setSelectionRange(pos, pos); }
@@ -254,6 +280,14 @@ document.addEventListener('change', ev => {
   const el = ev.target;
   if (el.dataset.compareSide) { const spanId = el.dataset.span; const pair = comparisonPair(state, spanId).map(a => a?.id || ''); const side = el.dataset.compareSide === 'left' ? 0 : 1; if (pair[1 - side] === el.value) pair[1 - side] = pair[side]; pair[side] = el.value; state.comparisons[spanId] = pair; render(); }
   else if (el.id === 'comparison-span') { selectSpan(state, el.value); state.activityTab = 'compare'; render(); }
+  else if (el.id === 'hub-dictation') { openDictation(el.value); }
+  else if (el.dataset.dictationProfile) { assignProfile(state, el.dataset.dictationProfile, el.value); render(); }
+  else if (['profile-model', 'profile-mode', 'profile-primer'].includes(el.id) && state.profileDraft) { const key = { 'profile-model': 'model', 'profile-mode': 'mode', 'profile-primer': 'includePrimer' }[el.id]; state.profileDraft[key] = el.type === 'checkbox' ? el.checked : el.value; }
+  else if (el.id === 'profile-picker') { editProfile(state, el.value); renderModal(); }
+  else if (el.id === 'run-profile') { updateRecognitionPreview(); }
+  else if (el.id === 'run-plan') { modalRoot.querySelector('#run-parts').disabled = el.value === 'single'; }
+  else if (el.id === 'revision-profile') { assignProfile(state, 'corrector', el.value); state.revisionMode = selectedProfile(state, 'corrector').mode; renderModal(); }
+  else if (el.id === 'attempt-config') { modalRoot.querySelector('#retry-profile-controls').hidden = el.value !== 'current'; }
   else if (el.id === 'attempt-audio') { modalRoot.querySelector('#attempt-padding').hidden = el.value !== 'custom'; updateRetryPreview(); }
   else if (el.dataset.reviewSetting) { state[el.dataset.reviewSetting] = el.value; render(); }
   else if (el.id === 'assembly-scope') { state.assemblyMode = el.value; }
@@ -281,7 +315,7 @@ document.addEventListener('keydown', ev => {
   if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === 'z' && !editing && state.page === 'studio') { ev.preventDefault(); action('undo'); return; }
   if (editing) return;
   if (ev.target.id === 'waveform' && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(ev.key)) { ev.preventDefault(); setPosition(ev.key === 'Home' ? 0 : ev.key === 'End' ? currentDictation(state).duration : state.position + (ev.key === 'ArrowLeft' ? -5 : 5)); return; }
-  if (['jobs', 'review'].includes(state.page)) { if (ev.key === 'Escape') { state.activityInspectorOpen = false; render(); } return; }
+  if (['jobs', 'review', 'dictation'].includes(state.page)) { if (ev.key === 'Escape') { state.activityInspectorOpen = false; render(); } return; }
   const shortcuts = { ' ': 'play', r: 'record', m: 'marker', j: 'skip-back', l: 'skip-forward' };
   if (shortcuts[ev.key.toLowerCase()]) { ev.preventDefault(); action(shortcuts[ev.key.toLowerCase()]); }
   else if (ev.key === 'Escape') { state.activityInspectorOpen = false; state.inspectorOpen = false; state.sidebarOpen = false; render(); }

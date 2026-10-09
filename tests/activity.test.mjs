@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createState } from '../dist/src/store.js';
 import { unionSeconds, jobMetrics, spanStatus, queueAttempt, settleAttempt, retryFailed, cancelJob, toggleJob, createJob, selectJob } from '../dist/src/activity-store.js';
-import { activityView, newJobForm } from '../dist/src/activity-view.js';
+import { activityView } from '../dist/src/activity-view.js';
 
 test('fixture graph has valid references, transmitted windows contain targets, and shared spans are real', () => {
   const s = createState();
@@ -79,6 +79,5 @@ test('bulk retry targets failed spans only and is idempotent while retries are p
 test('all activity states render, with escaped identifiers and no editorial headings', () => {
   const s = createState();
   for (const job of s.jobs) { selectJob(s, job.id); for (const tab of ['spans', 'attempts', 'events', 'config']) for (const detail of ['details', 'context', 'response', 'raw']) { s.activityTab = tab; s.attemptTab = detail; assert.match(activityView(s), /Activity/); } }
-  assert.match(newJobForm(s), /existing dictation/);
   s.jobs[0].title = '<script>test</script>'; assert.ok(!activityView(s).includes('<script>test'));
 });

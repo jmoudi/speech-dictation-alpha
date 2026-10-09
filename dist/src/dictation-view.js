@@ -10,6 +10,6 @@ export function dictationSummary(s) {
 export function documentGaps(s) {
   return dictationCoverage(s, s.dictationId).documentGaps.map(range => {
     const result = gapExecution(s, s.dictationId, range);
-    return { start: range[0], gap: true, html: `<section class="document-gap ${result.state === 'Recognition failed' ? 'failed-gap' : result.state === 'Evidence ready' ? 'ready-gap' : ''}"><div class="gap-time">${time(range[0])}–${time(range[1])}</div><div><strong>${e(result.state)}</strong><span>${result.state === 'Evidence ready' ? 'Recognition result available; not inserted into the document.' : 'This audio interval has no document text yet.'}</span></div><button class="button small-button" data-action="inspect-gap" data-start="${range[0]}" data-end="${range[1]}">${result.attempt ? 'Inspect' : 'Process span'}${icon('chevron')}</button></section>` };
+    return { start: range[0], gap: true, html: `<section class="document-gap ${result.state === 'Recognition failed' ? 'failed-gap' : result.state === 'Evidence ready' ? 'ready-gap' : ''}"><div class="gap-time">${time(range[0])}–${time(range[1])}</div><div><strong>${e(result.state)}</strong><span>${result.state === 'Evidence ready' ? 'Recognition result available; not inserted into the document.' : 'This audio interval has no document text yet.'}</span></div><button class="button small-button" data-action="inspect-gap" data-start="${range[0]}" data-end="${range[1]}">${result.attempt ? 'Inspect' : 'Dictation tools'}${icon('chevron')}</button></section>` };
   });
 }

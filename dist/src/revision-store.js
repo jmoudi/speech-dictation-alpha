@@ -1,4 +1,4 @@
-import { compileContext } from './store.js';
+import { selectedProfile, profileContext } from './profile-store.js';
 import { diffWords } from './evidence.js';
 import { documentState, snapshotEdit, commitDocument, journal } from './document-state.js';
 export function targetText(attempt, span) {
@@ -68,25 +68,19 @@ export function applyAssemblyStep(s, planId, stepId) {
   blocks.sort((a, b) => a.start - b.start); step.state = 'applied'; plan.expectedVersion = commitDocument(s, plan.dictationId, 'Assembly', `${step.operation}: ${step.spanId}`, { planId, stepId, attemptIds: [step.attemptId] }); return { ok: true };
 }
 export function applyReadyAssembly(s, planId) { const p = s.assemblies.find(p => p.id === planId); let applied = 0; for (const step of p?.steps || []) if (step.state === 'pending' && ['Insert', 'Replace'].includes(step.operation)) { const result = applyAssemblyStep(s, planId, step.id); if (!result.ok) return { ok: false, applied, reason: result.reason }; applied++; } return { ok: true, applied }; }
-function revisionInput(s, dictationId, mode) {
-  return { ...structuredClone(compileContext({ ...s, primer: s.primers[dictationId] }, 'corrector')), revision_mode: mode, policy: mode === 'editorial' ? 'Rephrase or reorganize into a separate draft; preserve protected passages.' : 'Remove fillers and adjust formatting; preserve substantive wording and protected passages.', output: mode === 'editorial' ? 'Derived document' : 'Review proposals' };
-}
 export function createRevision(s, mode, dictationId = s.dictationId) {
-  const ds = documentState(s, dictationId), blocks = s.documents[dictationId];
-  if (mode === 'repair') return { mode, proposals: s.changes.filter(c => c.dictationId === dictationId && c.mode === 'repair' && c.state === 'pending').length };
-  const matches = blocks.map(b => ({ block: b, template: s.revisionTemplates.find(t => t.dictationId === dictationId && t.mode === mode && t.before === b.text) })).filter(x => x.template && !s.editedBlocks.has(x.block.id));
-  if (mode === 'cleanup') {
-    let count = 0;
-    for (const { block: b, template: t } of matches) {
-      if (s.changes.some(c => c.dictationId === dictationId && c.blockId === b.id && c.mode === mode && c.state === 'pending')) continue;
-      s.changes.push({ id: 'revision-' + (s.changes.length + 1), dictationId, blockId: b.id, mode, type: 'Cleanup', title: 'Remove spoken fillers', before: b.text, after: t.after, baseText: b.text, baseVersion: 'v' + ds.version, explanation: t.explanation, evidence: [...(b.provenance?.attemptIds || [])], time: [b.start, b.end], state: 'pending', model: s.settings.correctorModel, inputContext: revisionInput(s, dictationId, mode) }); count++;
-    }
-    journal(s, dictationId, 'Cleanup preview', 'Proposed', `${count} fixture proposals; manual edits excluded.`); return { mode, proposals: count };
+  const ds = documentState(s, dictationId), blocks = s.documents[dictationId], selected = selectedProfile(s, 'corrector', dictationId);
+  const profile = structuredClone(selected), inputContext = { ...profileContext(s, profile, dictationId), revision_mode: mode };
+  
+  const matches = blocks.map(b => ({ block: b, template: mode === 'repair' ? s.repairTemplates.find(t => t.dictationId === dictationId && t.blockId === b.id && b.text.includes(t.before)) : s.revisionTemplates.find(t => t.dictationId === dictationId && t.mode === mode && t.before === b.text) })).filter(x => x.template && !s.editedBlocks.has(x.block.id));
+  const jobId = 'correction-' + (s.jobs.filter(j => j.id.startsWith('correction-')).length + 1);
+  let count = 0;
+  for (const { block: b, template: t } of matches) {
+    if (s.changes.some(c => c.dictationId === dictationId && c.blockId === b.id && c.mode === mode && c.state === 'pending' && c.profileSnapshot?.id === profile.id && c.profileSnapshot?.version === profile.version)) continue;
+    s.changes.push({ id: 'revision-' + (s.changes.length + 1), dictationId, blockId: b.id, mode, type: mode === 'cleanup' ? 'Cleanup' : mode === 'repair' ? t.type : 'Editorial', title: mode === 'cleanup' ? 'Remove spoken fillers' : mode === 'repair' ? t.title : 'Suggested editorial rewrite', before: mode === 'repair' ? t.before : b.text, after: t.after, baseText: b.text, baseVersion: 'v' + ds.version, explanation: t.explanation, evidence: [...(b.provenance?.attemptIds || [])], time: [b.start, b.end], state: 'pending', model: profile.model, profileSnapshot: structuredClone(profile), inputContext: structuredClone(inputContext), jobId }); count++;
   }
-  const draft = { id: 'derived-' + dictationId + '-' + (ds.derived.length + 1), name: 'Editorial draft ' + (ds.derived.length + 1), mode: 'editorial', baseVersion: ds.version, created: new Date().toLocaleTimeString([], { hour12: false }), model: s.settings.correctorModel, changed: matches.length, blocks: structuredClone(blocks), inputPrimerVersion: s.primers[dictationId].version, inputContext: revisionInput(s, dictationId, mode) };
-  for (const { block, template } of matches) { const b = draft.blocks.find(b => b.id === block.id); b.text = template.after; b.provenance = { ...b.provenance, kind: 'Editorial', derivedFrom: `${dictationId}-v${ds.version}`, sourceBlockId: block.id, model: draft.model }; }
-  ds.derived.push(draft); s.selectedDerivedId = draft.id;
-  journal(s, dictationId, 'Editorial revision', 'Derived draft', `${matches.length} passages rewritten; working document and recognition context retained.`, { derivedId: draft.id }); return { mode, draft };
+  if (count) s.jobs.unshift({ id: jobId, dictationId, title: 'Correction suggestions · ' + profile.name, kind: 'Text correction', plan: mode, model: profile.model, state: 'Complete', spanIds: [], created: new Date().toLocaleTimeString([], { hour12: false }), priority: 'Normal', concurrency: 1, contextPolicy: 'Frozen profile and primer', output: count + ' review proposals', dependsOnJobs: [], profileSnapshot: structuredClone(profile), textTask: { input: 'Working document v' + ds.version, baseVersion: ds.version, scope: 'Unprotected passages with matching fixtures', guard: 'Suggestions only; human acceptance required', result: count + ' proposals', inputContext: structuredClone(inputContext) }, initiatedFrom: 'Dictation', notes: 'Illustrative corrector output. No document text was modified.' });
+  journal(s, dictationId, 'Corrector · ' + mode, 'Proposed', `${count} fixture proposals; working document retained.`, { jobId: count ? jobId : null, profileId: profile.id, profileVersion: profile.version }); return { mode, proposals: s.changes.filter(c => c.dictationId === dictationId && c.mode === mode && c.state === 'pending' && c.profileSnapshot?.id === profile.id && c.profileSnapshot?.version === profile.version).length, created: count };
 }
 export const currentDerived = s => documentState(s).derived.find(d => d.id === s.selectedDerivedId) || documentState(s).derived.at(-1);
 function disagreementRisk(texts) {
@@ -95,7 +89,7 @@ function disagreementRisk(texts) {
 }
 export function reviewItems(s) {
   const items = [];
-  for (const c of s.changes) items.push({ id: 'change:' + c.id, kind: 'Revision', dictationId: c.dictationId, title: c.title, before: c.before, after: c.after, range: c.time, risk: c.mode === 'cleanup' ? { tags: ['Cleanup'], score: 10, level: 'Low' } : c.type === 'Terminology' ? { tags: ['Terminology'], score: 25, level: 'Low' } : semanticRisk(c.before, c.after), state: c.state === 'pending' ? 'Pending' : 'Resolved', changeId: c.id, explanation: c.explanation, evidence: c.evidence });
+  for (const c of s.changes) items.push({ id: 'change:' + c.id, kind: 'Revision', dictationId: c.dictationId, title: c.title, before: c.before, after: c.after, range: c.time, risk: c.mode === 'cleanup' ? { tags: ['Cleanup'], score: 10, level: 'Low' } : c.type === 'Terminology' ? { tags: ['Terminology'], score: 25, level: 'Low' } : semanticRisk(c.before, c.after), state: c.state === 'pending' ? 'Pending' : 'Resolved', changeId: c.id, explanation: c.explanation, evidence: c.evidence, model: c.model, mode: c.mode, profileSnapshot: c.profileSnapshot, inputContext: c.inputContext });
   for (const span of s.spans) {
     const a = s.attempts.filter(a => a.spanId === span.id && a.state === 'Succeeded' && targetText(a, span) !== null), texts = [...new Set(a.map(x => normalized(targetText(x, span))))];
     if (texts.length < 2) continue;
