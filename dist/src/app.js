@@ -1,10 +1,12 @@
-import { selectJob, selectSpan, queueAttempt, retryFailed, settleAttempt, cancelJob, toggleJob, createJob, visibleJobs, registerRequest } from './activity-store.js';
+import { comparisonPair, preferAttempt, gapExecution } from './evidence.js';
+import { selectJob, selectSpan, queueAttempt, retryFailed, settleAttempt, cancelJob, toggleJob, createJob, visibleJobs, registerRequest, dispatchReady } from './activity-store.js';
 import { createState, currentDictation, currentBlocks, pendingChanges, applyChange, undoEdit, snapshotEdit, setModel, compileContext, wordCount, time } from './store.js';
 import { renderApp, transport, modal as modalView } from './views.js';
 import { LIVE_EXAMPLE, IMPORT_EXAMPLE, SIMULATION, NEW_PRIMER_TOPIC } from '../fixtures/demo-data.js';
 
 let state = createState();
 state.inspectorOpen = window.innerWidth >= 980;
+state.activityInspectorOpen = window.innerWidth >= 1200;
 const root = document.querySelector('#app');
 const modalRoot = document.querySelector('#modal-root');
 let toastTimer, lastFocus, importedFileName = '', phraseTick = 0;
@@ -15,20 +17,31 @@ function toast(message) {
   toastTimer = setTimeout(() => el.classList.remove('visible'), 4800);
 }
 
+function focusKey(el) {
+  if (!el) return null;
+  if (el.id) return '#' + CSS.escape(el.id);
+  const keys = ['action', 'id', 'value', 'setting', 'activitySetting', 'compareSide'];
+  const parts = keys.filter(key => el.dataset?.[key] !== undefined).map(key => `[data-${key.replace(/[A-Z]/g, c => '-' + c.toLowerCase())}="${CSS.escape(el.dataset[key])}"]`);
+  return parts.length ? el.tagName.toLowerCase() + parts.join('') : null;
+}
 function render({ preserveScroll = true } = {}) {
-  const scrolls = preserveScroll ? [...root.querySelectorAll('.document-scroll,.inspector-scroll,.recording-list,.job-detail-scroll,.job-list')].map(el => [el.className, el.scrollTop]) : [];
+  const focus = root.contains(document.activeElement) ? focusKey(document.activeElement) : null;
+  const scrolls = preserveScroll ? [...root.querySelectorAll('.document-scroll,.inspector-scroll,.recording-list,.job-detail-scroll,.job-list,.attempt-inspector-body')].map(el => [el.className, el.scrollTop]) : [];
   root.innerHTML = renderApp(state);
   document.body.classList.toggle('theme-dark', state.settings.theme === 'dark');
   document.body.classList.toggle('text-large', state.settings.fontSize === 'large');
   for (const [name, top] of scrolls) root.querySelector('.' + name.split(' ')[0])?.scrollTo(0, top);
   renderModal();
+  if (focus && !state.modal) root.querySelector(focus)?.focus({ preventScroll: true });
 }
 
 function renderModal() {
+  const focus = modalRoot.contains(document.activeElement) ? focusKey(document.activeElement) : null;
   const oldScroll = modalRoot.querySelector('.settings-content')?.scrollTop || 0;
   modalRoot.innerHTML = modalView(state);
   root.inert = Boolean(state.modal);
   modalRoot.querySelector('.settings-content')?.scrollTo(0, oldScroll);
+  if (focus && state.modal) modalRoot.querySelector(focus)?.focus({ preventScroll: true });
 }
 
 function openModal(name, settingsTab) {
@@ -82,6 +95,13 @@ function addSimulatedRequest(r, input, options = {}) {
   state.requests.unshift(request); registerRequest(state, request); state.requestId = id; return request;
 }
 
+function updateRetryPreview() {
+  const span = state.spans.find(p => p.id === state.retrySpanId), audio = state.audioAssets.find(a => a.id === span.audioId);
+  const custom = modalRoot.querySelector('#attempt-audio').value === 'custom';
+  if (custom) { const before = Number(modalRoot.querySelector('#attempt-before').value) || 0, after = Number(modalRoot.querySelector('#attempt-after').value) || 0; const start = Math.max(0, span.target[0] - before), end = Math.min(audio.duration, span.target[1] + after); modalRoot.querySelector('#retry-window-preview').textContent = `New input ${time(start)}–${time(end)} · ${(end - start).toFixed(1)} seconds · target remains ${time(span.target[0])}–${time(span.target[1])}`; }
+  else { const previous = state.attempts.filter(a => a.jobId === state.selectedJobId && a.spanId === span.id).at(-1); modalRoot.querySelector('#retry-window-preview').textContent = previous ? `Exact input ${time(previous.input[0])}–${time(previous.input[1])} · ${previous.blobId}` : 'Prepare default input with six seconds of context before and after.'; }
+}
+
 function exportData() {
   const content = modalRoot.querySelector('#export-content').value; let format = modalRoot.querySelector('#export-format').value;
   const r = currentDictation(state); const blocks = content === 'source' ? r.blocks : currentBlocks(state);
@@ -97,10 +117,17 @@ function exportData() {
 function action(name, el) {
   const id = el?.dataset.id, value = el?.dataset.value;
   switch (name) {
-    case 'activity-reference': { const a = state.attempts.find(a => a.id === id); if (a) { selectJob(state, a.jobId); selectSpan(state, a.spanId); state.selectedAttemptId = a.id; state.page = 'jobs'; state.jobFilter = 'All'; state.jobDictationFilter = 'all'; state.jobQuery = ''; state.activityTab = 'spans'; render(); } break; }
+    case 'activity-reference': { const a = state.attempts.find(a => a.id === id); if (a) { selectJob(state, a.jobId); selectSpan(state, a.spanId); state.selectedAttemptId = a.id; state.activityInspectorOpen = true; state.page = 'jobs'; state.jobFilter = 'All'; state.jobDictationFilter = 'all'; state.jobQuery = ''; state.activityTab = 'spans'; render(); } break; }
+    case 'toggle-activity-inspector': state.activityInspectorOpen = !state.activityInspectorOpen; render(); break;
+    case 'compare-span': selectSpan(state, id); state.activityTab = 'compare'; render(); break;
+    case 'prefer-evidence': { const result = preferAttempt(state, id); render(); toast(result.ok ? 'Preferred evidence recorded. Review document edits separately.' : result.reason); break; }
+    case 'configure-attempt': state.retrySpanId = id; openModal('retry-attempt'); break;
+    case 'confirm-attempt': { const get = id => modalRoot.querySelector('#' + id).value; const custom = get('attempt-audio') === 'custom'; const result = queueAttempt(state, state.selectedJobId, state.retrySpanId, { model: get('attempt-model'), currentContext: get('attempt-context') === 'current', ...(custom ? { before: Number(get('attempt-before')), after: Number(get('attempt-after')) } : {}) }); if (!result.ok) { toast(result.reason); break; } closeModal(); state.activityTab = 'spans'; state.activityInspectorOpen = true; render(); toast('Attempt queued with its own audio input and frozen context.'); break; }
+    case 'dispatch-ready': { const result = dispatchReady(state, id); state.activityInspectorOpen = true; render(); toast(`${result.started} attempts dispatched; ${result.queued} newly queued. Concurrency and dependencies enforced.`); break; }
+    case 'inspect-gap': { const range = [Number(el.dataset.start), Number(el.dataset.end)]; const result = gapExecution(state, state.dictationId, range); if (result.attempt) { action('activity-reference', { dataset: { id: result.attempt.id } }); } else if (result.span) { const job = state.jobs.find(j => j.spanIds.includes(result.span.id)); selectJob(state, job.id); selectSpan(state, result.span.id); state.page = 'jobs'; state.jobDictationFilter = 'all'; state.jobFilter = 'All'; state.jobQuery = ''; render(); } else { openModal('new-job'); modalRoot.querySelector('#job-dictation').value = state.dictationId; modalRoot.querySelector('#job-start').value = range[0]; modalRoot.querySelector('#job-end').value = range[1]; modalRoot.querySelector('#job-plan').value = 'single'; modalRoot.querySelector('#job-parts').disabled = true; } break; }
     case 'activity-job': selectJob(state, id); render(); break;
     case 'activity-span': selectSpan(state, id); state.activityTab = 'spans'; render(); break;
-    case 'activity-attempt': { const a = state.attempts.find(a => a.id === id); state.selectedAttemptId = id; state.selectedSpanId = a.spanId; render(); break; }
+    case 'activity-attempt': { const a = state.attempts.find(a => a.id === id); state.selectedAttemptId = id; state.selectedSpanId = a.spanId; state.activityInspectorOpen = true; render(); break; }
     case 'activity-tab': state.activityTab = value; render(); break;
     case 'attempt-tab': state.attemptTab = value; render(); break;
     case 'dictation-jobs': state.page = 'jobs'; state.jobDictationFilter = state.dictationId; state.jobFilter = 'All'; state.jobQuery = ''; selectJob(state, state.jobs.find(j => j.dictationId === state.dictationId)?.id); render(); break;
@@ -189,7 +216,8 @@ document.addEventListener('click', ev => {
 document.addEventListener('focusin', ev => { if (ev.target.matches('[data-edit-block][contenteditable]')) { ev.target.dataset.before = ev.target.textContent; ev.target.dataset.snapshotted = ''; } });
 document.addEventListener('input', ev => {
   const el = ev.target;
-  if (el.id === 'job-search') { const pos = el.selectionStart; state.jobQuery = el.value; const jobs = visibleJobs(state); if (!jobs.some(j => j.id === state.selectedJobId)) selectJob(state, jobs[0]?.id); render(); const next = root.querySelector('#job-search'); next.focus(); next.setSelectionRange(pos, pos); }
+  if (['attempt-before', 'attempt-after'].includes(el.id)) { updateRetryPreview(); }
+  else if (el.id === 'job-search') { const pos = el.selectionStart; state.jobQuery = el.value; const jobs = visibleJobs(state); if (!jobs.some(j => j.id === state.selectedJobId)) selectJob(state, jobs[0]?.id); render(); const next = root.querySelector('#job-search'); next.focus(); next.setSelectionRange(pos, pos); }
   else if (el.id === 'library-search') { const pos = el.selectionStart; state.libraryQuery = el.value; render(); const next = root.querySelector('#library-search'); next.focus(); next.setSelectionRange(pos, pos); }
   else if (el.id === 'document-find') { const pos = el.selectionStart; state.findQuery = el.value; render(); const next = root.querySelector('#document-find'); next.focus(); next.setSelectionRange(pos, pos); }
   else if (el.matches('[data-edit-block][contenteditable]')) {
@@ -204,7 +232,10 @@ document.addEventListener('input', ev => {
 });
 document.addEventListener('change', ev => {
   const el = ev.target;
-  if (el.dataset.activitySetting) { state[el.dataset.activitySetting] = el.value; if (['jobFilter', 'jobDictationFilter'].includes(el.dataset.activitySetting)) { const jobs = visibleJobs(state); if (!jobs.some(j => j.id === state.selectedJobId)) selectJob(state, jobs[0]?.id); } render(); }
+  if (el.dataset.compareSide) { const spanId = el.dataset.span; const pair = comparisonPair(state, spanId).map(a => a?.id || ''); const side = el.dataset.compareSide === 'left' ? 0 : 1; if (pair[1 - side] === el.value) pair[1 - side] = pair[side]; pair[side] = el.value; state.comparisons[spanId] = pair; render(); }
+  else if (el.id === 'comparison-span') { selectSpan(state, el.value); state.activityTab = 'compare'; render(); }
+  else if (el.id === 'attempt-audio') { modalRoot.querySelector('#attempt-padding').hidden = el.value !== 'custom'; updateRetryPreview(); }
+  else if (el.dataset.activitySetting) { state[el.dataset.activitySetting] = el.value; if (['jobFilter', 'jobDictationFilter'].includes(el.dataset.activitySetting)) { const jobs = visibleJobs(state); if (!jobs.some(j => j.id === state.selectedJobId)) selectJob(state, jobs[0]?.id); } render(); }
   else if (el.id === 'job-dictation') { modalRoot.querySelector('#job-end').value = state.dictations.find(d => d.id === el.value).duration; }
   else if (el.id === 'job-plan') { modalRoot.querySelector('#job-parts').disabled = el.value === 'single'; }
   else if (el.id === 'request-select') { state.requestId = el.value; render(); }
@@ -228,10 +259,10 @@ document.addEventListener('keydown', ev => {
   if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === 'z' && !editing) { ev.preventDefault(); action('undo'); return; }
   if (editing) return;
   if (ev.target.id === 'waveform' && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(ev.key)) { ev.preventDefault(); setPosition(ev.key === 'Home' ? 0 : ev.key === 'End' ? currentDictation(state).duration : state.position + (ev.key === 'ArrowLeft' ? -5 : 5)); return; }
-  if (state.page === 'jobs') return;
+  if (state.page === 'jobs') { if (ev.key === 'Escape') { state.activityInspectorOpen = false; render(); } return; }
   const shortcuts = { ' ': 'play', r: 'record', m: 'marker', j: 'skip-back', l: 'skip-forward' };
   if (shortcuts[ev.key.toLowerCase()]) { ev.preventDefault(); action(shortcuts[ev.key.toLowerCase()]); }
-  else if (ev.key === 'Escape') { state.inspectorOpen = false; state.sidebarOpen = false; render(); }
+  else if (ev.key === 'Escape') { state.activityInspectorOpen = false; state.inspectorOpen = false; state.sidebarOpen = false; render(); }
   else if (ev.key === '/') { ev.preventDefault(); state.sidebarOpen = true; render(); root.querySelector('#library-search')?.focus(); }
 });
 

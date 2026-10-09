@@ -20,13 +20,17 @@ Open http://localhost:4173. Serve `dist/` with any static web server for deploym
 - **Attempt**: one execution for a job/span, with its own status, model, blob, frozen context, response, error, and execution order.
 - **Blob**: prepared audio input. The window can include evidence before and after the target and overlap other windows. A retry can reuse a blob or prepare a wider one.
 
-Activity opens by default. The political-report fixture has four jobs, including independent comparison and text-processing jobs. The main ASR job demonstrates out-of-order completion, a recovered retry, three failed attempts on one span, an in-flight attempt, a dependency-blocked span, and unattempted work. A comparison job references the same failed span with a different model.
+Activity opens by default with a job browser, execution tables, and a side inspector (a drawer on narrower screens). The political-report fixture has four jobs, including independent comparison and text-processing jobs. The main ASR job demonstrates out-of-order completion, a recovered retry, three failed attempts on one span, an in-flight attempt, a dependency-blocked span, and unattempted work. A comparison job references the same failed span with a different model.
 
 Target coverage uses the union of successful target intervals within the selected job. Transmitted duration sums submitted attempt windows, including context overlap and retries. Success stores evidence; it does not apply text to the document.
 
 ## Explore
 
 - Filter jobs by dictation/status or search by ID; inspect spans, attempts, execution events, and configuration.
+- Compare attempts across jobs for a shared span, inspect word differences, and record preferred evidence independently of document editing. The comparison shows whether model, input blob, and context snapshot match.
+- Configure a new attempt’s ASR model, exact reused blob or custom evidence padding, and original/current context snapshot.
+- Dispatch ready spans while respecting concurrency slots, paused jobs, and explicit predecessor dependencies. Responses remain manually simulated.
+- View dictation-level recognition coverage separately from intervals represented in the document. Missing-text placeholders link to the relevant execution or a new job.
 - Inspect the overlap diagram and each attempt’s blob, frozen context, serialized ASR input, response/error, and raw JSON.
 - Create additional jobs for existing dictations; retry failed spans, expand context, pause dispatch, cancel jobs, and explicitly simulate success/failure. Cancellation preserves completed evidence.
 - Open the associated dictation or jump from a workspace recognition request to its job/span/attempt.
@@ -48,6 +52,9 @@ dist/
   fixtures/activity-data.js # Job/span/attempt/blob/context fixtures and responses
   src/activity-store.js # Job lifecycle, retries, union coverage, frozen context
   src/activity-view.js  # Job browser, span/attempt tables, evidence inspector
+  src/comparison-view.js # Cross-job comparisons and attempt configuration
+  src/evidence.js       # Preferred evidence, text diff, dictation coverage
+  src/dictation-view.js # Coverage summaries and missing-text placeholders
   src/store.js          # State transitions, guarded proposals, context compilation
   src/views.js          # UI rendering, no embedded sample transcripts
   src/app.js            # DOM events and explicitly simulated transport
@@ -68,4 +75,4 @@ npm run check
 npm test
 ```
 
-Tests cover domain references, shared spans, overlap-safe coverage, independent retries, frozen context, dependency blocking, cancellation, job creation, evidence preservation, undo, protection of human edits, stale proposals, per-dictation context isolation, context compilation, model/strategy compatibility, HTML escaping, and rendering across inspector/dialog states. This implementation was checked without an interactive browser QA pass.
+Tests cover comparison provenance, negation differences, preferred-evidence protection, dictation/document coverage separation, concurrency-aware dispatch, custom-window validation, domain references, shared spans, overlap-safe coverage, independent retries, frozen context, dependency blocking, cancellation, job creation, evidence preservation, undo, protection of human edits, stale proposals, per-dictation context isolation, context compilation, model/strategy compatibility, HTML escaping, and rendering across inspector/dialog states. This implementation was checked without an interactive browser QA pass.

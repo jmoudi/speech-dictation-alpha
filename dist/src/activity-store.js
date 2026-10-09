@@ -1,6 +1,6 @@
 import { ATTEMPT_SIMULATION } from '../fixtures/activity-data.js';
 
-export const activityInitialState = () => ({ selectedJobId: 'job-104', selectedSpanId: 'span-p04', selectedAttemptId: 'att-409', activityTab: 'spans', attemptTab: 'details', jobFilter: 'All', jobDictationFilter: 'all', jobQuery: '', spanFilter: 'All', attemptFilter: 'All', attemptSort: 'submitted', activityEvents: [] });
+export const activityInitialState = () => ({ selectedJobId: 'job-104', selectedSpanId: 'span-p02', selectedAttemptId: 'att-405', activityTab: 'spans', attemptTab: 'details', jobFilter: 'All', jobDictationFilter: 'all', jobQuery: '', spanFilter: 'All', attemptFilter: 'All', attemptSort: 'submitted', activityEvents: [], comparisons: {}, preferredEvidence: {}, activityInspectorOpen: true, retrySpanId: null });
 export const jobAttempts = (s, id) => s.attempts.filter(a => a.jobId === id);
 export const jobSpans = (s, id) => { const j = s.jobs.find(j => j.id === id); return (j?.spanIds || []).map(id => s.spans.find(p => p.id === id)).filter(Boolean); };
 export function unionSeconds(ranges) {
@@ -46,8 +46,13 @@ export function queueAttempt(s, jobId, spanId, options = {}) {
   if (previous.some(a => ['Queued', 'Running'].includes(a.state))) return { ok: false, reason: 'An attempt is already queued or running for this span.' };
   const last = previous.at(-1), asset = s.audioAssets.find(a => a.id === span.audioId);
   let blob = last && s.blobs.find(b => b.id === last.blobId);
-  if (!blob || options.expanded) {
-    const pad = options.expanded ? 12 : 6, input = [Math.max(0, span.target[0] - pad), Math.min(asset.duration, span.target[1] + pad)];
+  if (!asset) return { ok: false, reason: 'Audio asset not found.' };
+  const custom = options.before !== undefined || options.after !== undefined;
+  const before = custom ? Number(options.before || 0) : options.expanded ? 12 : 6;
+  const after = custom ? Number(options.after || 0) : options.expanded ? 12 : 6;
+  if (![before, after].every(n => Number.isFinite(n) && n >= 0 && n <= 120)) return { ok: false, reason: 'Evidence padding must be between 0 and 120 seconds.' };
+  if (!blob || options.expanded || custom) {
+    const input = [Math.max(0, span.target[0] - before), Math.min(asset.duration, span.target[1] + after)];
     blob = { id: nextId(s.blobs, 'blob-local-'), audioId: span.audioId, input, bytes: (input[1] - input[0]) * ATTEMPT_SIMULATION.bytesPerSecond, format: 'PCM16 · mono · 24 kHz', digest: 'fixture:local-preparation', stored: true }; s.blobs.push(blob);
   }
   let contextId = last?.contextId || job.contextId;
@@ -61,11 +66,31 @@ export function queueAttempt(s, jobId, spanId, options = {}) {
   s.selectedAttemptId = attempt.id; s.selectedSpanId = spanId; return { ok: true, attempt };
 }
 export function retryFailed(s, jobId) { let count = 0; for (const span of jobSpans(s, jobId)) if (spanStatus(s, jobId, span.id) === 'Failed' && queueAttempt(s, jobId, span.id).ok) count++; return count; }
+export function startAttempt(s, id) {
+  const a = s.attempts.find(a => a.id === id); if (!a || a.state !== 'Queued') return { ok: false, reason: 'Only queued attempts can be dispatched.' };
+  const j = s.jobs.find(j => j.id === a.jobId), p = s.spans.find(p => p.id === a.spanId);
+  if (['Paused', 'Cancelled', 'Blocked'].includes(j.state)) return { ok: false, reason: 'Job dispatch is ' + j.state.toLowerCase() + '.' };
+  if (p.dependsOn.some(id => !jobAttempts(s, j.id).some(a => a.spanId === id && a.state === 'Succeeded'))) return { ok: false, reason: 'Required preceding span has no successful result.' };
+  if (jobAttempts(s, j.id).filter(a => a.state === 'Running').length >= j.concurrency) return { ok: false, reason: 'All concurrency slots are occupied.' };
+  a.state = 'Running'; a.transmitted = true; a.started = new Date().toLocaleTimeString([], { hour12: false }); a.submittedOrder = Math.max(0, ...s.attempts.map(a => a.submittedOrder || 0)) + 1;
+  j.state = 'Running'; syncRequestProjection(s, a); log(s, j.id, 'dispatched', a.id + ' started for ' + p.id + '.'); return { ok: true };
+}
+export function dispatchReady(s, jobId) {
+  const j = s.jobs.find(j => j.id === jobId); if (!j || j.kind !== 'ASR' || ['Paused', 'Cancelled', 'Blocked'].includes(j.state)) return { started: 0, queued: 0 };
+  let queued = 0, started = 0;
+  for (const p of jobSpans(s, jobId)) {
+    const attempts = jobAttempts(s, jobId).filter(a => a.spanId === p.id);
+    if (!attempts.length && spanStatus(s, jobId, p.id) === 'Queued') { if (queueAttempt(s, jobId, p.id).ok) queued++; }
+  }
+  for (const a of jobAttempts(s, jobId).filter(a => a.state === 'Queued')) if (startAttempt(s, a.id).ok) started++;
+  return { started, queued };
+}
 export function settleAttempt(s, id, success) {
   const a = s.attempts.find(a => a.id === id); if (!a || !['Queued', 'Running'].includes(a.state)) return { ok: false, reason: 'Only pending attempts can be simulated.' };
   const j = s.jobs.find(j => j.id === a.jobId), span = s.spans.find(p => p.id === a.spanId);
   if (j.state === 'Paused' && a.state === 'Queued') return { ok: false, reason: 'Resume dispatch before running a queued attempt.' };
   if (span.dependsOn.some(id => !jobAttempts(s, j.id).some(a => a.spanId === id && a.state === 'Succeeded'))) return { ok: false, reason: 'Required preceding span has no successful result.' };
+  if (a.state === 'Queued') { const started = startAttempt(s, id); if (!started.ok) return started; }
   a.submittedOrder ??= Math.max(0, ...s.attempts.map(a => a.submittedOrder || 0)) + 1;
   a.completedOrder = Math.max(0, ...s.attempts.map(a => a.completedOrder || 0)) + 1;
   a.started ||= new Date().toLocaleTimeString([], { hour12: false }); a.ended = new Date().toLocaleTimeString([], { hour12: false }); a.transmitted = true; a.elapsedMs = ATTEMPT_SIMULATION.elapsedMs;
@@ -73,7 +98,7 @@ export function settleAttempt(s, id, success) {
   syncRequestProjection(s, a);
   log(s, j.id, success ? 'succeeded' : 'failed', `${a.id}: ${a.state.toLowerCase()}.`);
   const metrics = jobMetrics(s, j.id);
-  if (metrics.succeeded === metrics.spanCount) j.state = 'Complete';
+  if (metrics.succeeded === metrics.spanCount && !jobAttempts(s, j.id).some(a => ['Queued', 'Running'].includes(a.state))) j.state = 'Complete';
   else if (j.state !== 'Paused') j.state = jobSpans(s, j.id).every(p => ['Succeeded', 'Recovered', 'Failed', 'Cancelled'].includes(spanStatus(s, j.id, p.id))) ? 'Failed' : 'Running';
   for (const dependent of s.jobs.filter(q => q.state === 'Blocked' && q.dependsOnJobs?.includes(j.id))) if (dependent.dependsOnJobs.every(id => s.jobs.find(q => q.id === id)?.state === 'Complete')) dependent.state = 'Queued';
   return { ok: true };

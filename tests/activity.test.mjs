@@ -73,7 +73,7 @@ test('new jobs reference existing dictations and snapshot context without creati
 
 test('bulk retry targets failed spans only and is idempotent while retries are pending', () => {
   const s = createState(); assert.equal(retryFailed(s, 'job-104'), 1); assert.equal(retryFailed(s, 'job-104'), 0);
-  assert.equal(s.attempts.filter(a => a.spanId === 'span-p02').length, 2);
+  assert.equal(s.attempts.filter(a => a.spanId === 'span-p02' && a.jobId === 'job-104').length, 2);
 });
 
 test('all activity states render, with escaped identifiers and no editorial headings', () => {
