@@ -4,10 +4,10 @@ import { createState, applyChange, undoEdit, compileContext, setModel, snapshotE
 import { renderApp, modal } from '../dist/src/views.js';
 
 test('accepting a correction preserves recognition evidence and supports undo', () => {
-  const s = createState(); const original = structuredClone(s.recordings); const evidence = structuredClone(s.requests);
+  const s = createState(); const original = structuredClone(s.dictations); const evidence = structuredClone(s.requests);
   assert.equal(applyChange(s, 'change-1').ok, true);
   assert.match(s.documents.architecture[1].text, /frontend/);
-  assert.deepEqual(s.recordings, original); assert.deepEqual(s.requests, evidence);
+  assert.deepEqual(s.dictations, original); assert.deepEqual(s.requests, evidence);
   assert.equal(applyChange(s, 'change-1').ok, false);
   assert.equal(undoEdit(s), true); assert.match(s.documents.architecture[1].text, /front end/);
   assert.equal(s.changes[0].state, 'pending'); assert.equal(s.version, 12);
@@ -32,7 +32,7 @@ test('primer inputs adapt to the consumer and exclude unconfirmed terms', () => 
   assert.equal(compileContext(s, 'corrector').manual_edits, 'protected');
 });
 
-test('recordings and fresh demo sessions have independent primers and documents', () => {
+test('dictations and fresh demo sessions have independent primers and documents', () => {
   const s = createState(); const fresh = createState();
   assert.equal(s.primer, s.primers.architecture);
   s.primer.topic = 'Changed'; assert.notEqual(s.primers.interview.topic, 'Changed'); assert.notEqual(fresh.primer.topic, 'Changed');
@@ -46,12 +46,12 @@ test('execution settings remain compatible when switching ASR models', () => {
 });
 
 test('every inspector, document, settings, and dialog state renders', () => {
-  const s = createState();
-  for (const source of s.recordings) for (const panel of ['changes', 'recognition', 'context', 'models']) {
-    s.sourceId = source.id; s.primer = s.primers[source.id]; s.requestId = s.requests.find(r => r.sourceId === source.id)?.id; s.inspector = panel;
+  const s = createState(); s.page = 'studio';
+  for (const source of s.dictations) for (const panel of ['changes', 'recognition', 'context', 'models']) {
+    s.dictationId = source.id; s.primer = s.primers[source.id]; s.requestId = s.requests.find(r => r.dictationId === source.id)?.id; s.inspector = panel;
     for (const tab of ['primer', 'asr', 'corrector']) { s.contextTab = tab; assert.match(renderApp(s), /Speech Dictation/); }
   }
-  s.sourceId = 'architecture'; s.requestId = 'req-018'; s.primer = s.primers.architecture;
+  s.dictationId = 'architecture'; s.requestId = 'req-018'; s.primer = s.primers.architecture;
   for (const tab of ['details', 'context', 'response']) { s.inspector = 'recognition'; s.requestTab = tab; assert.ok(renderApp(s).length > 1000); }
   for (const dialog of ['settings', 'export', 'import', 'add-term', 'add-tag', 'rerun', 'shortcuts']) {
     s.modal = dialog;
@@ -61,7 +61,7 @@ test('every inspector, document, settings, and dialog state renders', () => {
 });
 
 test('user-entered content is escaped in rendered views', () => {
-  const s = createState(); s.documents.architecture[0].text = '<script>alert("x")</script>';
+  const s = createState(); s.page = 'studio'; s.documents.architecture[0].text = '<script>alert("x")</script>';
   assert.ok(!renderApp(s).includes('<script>alert')); assert.match(renderApp(s), /&lt;script&gt;/);
   assert.equal(escapeHtml('"<&'), '&quot;&lt;&amp;');
 });

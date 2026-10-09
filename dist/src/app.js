@@ -1,4 +1,5 @@
-import { createState, currentRecording, currentBlocks, pendingChanges, applyChange, undoEdit, snapshotEdit, setModel, compileContext, wordCount, time } from './store.js';
+import { selectJob, selectSpan, queueAttempt, retryFailed, settleAttempt, cancelJob, toggleJob, createJob, visibleJobs, registerRequest } from './activity-store.js';
+import { createState, currentDictation, currentBlocks, pendingChanges, applyChange, undoEdit, snapshotEdit, setModel, compileContext, wordCount, time } from './store.js';
 import { renderApp, transport, modal as modalView } from './views.js';
 import { LIVE_EXAMPLE, IMPORT_EXAMPLE, SIMULATION, NEW_PRIMER_TOPIC } from '../fixtures/demo-data.js';
 
@@ -15,7 +16,7 @@ function toast(message) {
 }
 
 function render({ preserveScroll = true } = {}) {
-  const scrolls = preserveScroll ? [...root.querySelectorAll('.document-scroll,.inspector-scroll,.recording-list')].map(el => [el.className, el.scrollTop]) : [];
+  const scrolls = preserveScroll ? [...root.querySelectorAll('.document-scroll,.inspector-scroll,.recording-list,.job-detail-scroll,.job-list')].map(el => [el.className, el.scrollTop]) : [];
   root.innerHTML = renderApp(state);
   document.body.classList.toggle('theme-dark', state.settings.theme === 'dark');
   document.body.classList.toggle('text-large', state.settings.fontSize === 'large');
@@ -41,16 +42,16 @@ function openModal(name, settingsTab) {
 function closeModal() { state.modal = null; renderModal(); if (lastFocus?.isConnected) lastFocus.focus(); else root.querySelector('[data-action=settings]')?.focus(); }
 function showInspector(tab) { state.inspector = tab; state.inspectorOpen = true; state.focusMode = false; }
 function selectSource(id) {
-  if (state.recording && id !== state.sourceId) { toast('Stop the recording preview before switching sources.'); return; }
-  state.playbackRange = null; state.sourceId = id; state.page = 'studio'; state.position = 0; state.playing = false; state.selectedBlockId = null; state.sidebarOpen = false; state.contextRequestId = null;
-  state.requestId = state.requests.find(r => r.sourceId === id)?.id || null;
+  if (state.recording && id !== state.dictationId) { toast('Stop the recording preview before switching sources.'); return; }
+  state.playbackRange = null; state.dictationId = id; state.page = 'studio'; state.position = 0; state.playing = false; state.selectedBlockId = null; state.sidebarOpen = false; state.contextRequestId = null;
+  state.requestId = state.requests.find(r => r.dictationId === id)?.id || null;
   state.primer = state.primers[id] || state.primer;
   render({ preserveScroll: false });
 }
 function scrollToBlock(id) { requestAnimationFrame(() => root.querySelector(`[data-block="${CSS.escape(id)}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })); }
-function setPosition(value) { state.playbackRange = null; const r = currentRecording(state); state.position = Math.max(0, Math.min(r.duration, value)); updateTransport(); }
+function setPosition(value) { state.playbackRange = null; const r = currentDictation(state); state.position = Math.max(0, Math.min(r.duration, value)); updateTransport(); }
 function updateTransport() {
-  const r = currentRecording(state); const duration = Math.max(r.duration, 1);
+  const r = currentDictation(state); const duration = Math.max(r.duration, 1);
   const pct = Math.min(100, state.position / duration * 100);
   const waveform = root.querySelector('#waveform');
   if (waveform) { waveform.style.setProperty('--played', pct + '%'); waveform.setAttribute('aria-valuenow', Math.floor(state.position)); waveform.setAttribute('aria-valuetext', time(state.position) + ' of ' + time(duration)); waveform.querySelectorAll('.wave-bars i').forEach((el, i, list) => el.classList.toggle('heard', i / list.length * 100 < pct)); }
@@ -63,29 +64,29 @@ function updateTransport() {
 
 function beginRecording() {
   if (state.recording) { stopRecording(); return; }
-  let r = state.recordings.find(r => r.id === LIVE_EXAMPLE.id);
-  if (!r) { r = structuredClone(LIVE_EXAMPLE); delete r.phrases; state.recordings.unshift(r); state.documents[r.id] = []; state.primers[r.id] = { ...structuredClone(state.primer), version: 1, topic: NEW_PRIMER_TOPIC, recentSpeech: '', terms: [] }; }
-  state.sourceId = r.id; state.primer = state.primers[r.id]; state.recording = true; state.recordingPaused = false; state.playing = false; phraseTick = 0; state.captureSeconds = r.duration; state.position = r.duration; state.livePhraseIndex = state.documents[r.id].length; state.page = 'studio'; state.inspector = 'recognition'; state.requestId = null; state.sidebarOpen = false;
+  let r = state.dictations.find(r => r.id === LIVE_EXAMPLE.id);
+  if (!r) { r = structuredClone(LIVE_EXAMPLE); delete r.phrases; state.dictations.unshift(r); state.documents[r.id] = []; state.primers[r.id] = { ...structuredClone(state.primer), version: 1, topic: NEW_PRIMER_TOPIC, recentSpeech: '', terms: [] }; }
+  state.dictationId = r.id; state.primer = state.primers[r.id]; state.recording = true; state.recordingPaused = false; state.playing = false; phraseTick = 0; state.captureSeconds = r.duration; state.position = r.duration; state.livePhraseIndex = state.documents[r.id].length; state.page = 'studio'; state.inspector = 'recognition'; state.requestId = null; state.sidebarOpen = false;
   render({ preserveScroll: false }); toast('Recording preview started. No microphone is being accessed.');
 }
 function stopRecording() {
   state.recording = false; state.recordingPaused = false;
-  const r = currentRecording(state); r.duration = state.captureSeconds; r.status = 'Ready'; r.blocks = structuredClone(currentBlocks(state));
+  const r = currentDictation(state); r.duration = state.captureSeconds; r.status = 'Ready'; r.blocks = structuredClone(currentBlocks(state));
   if (r.duration > 0) addSimulatedRequest(r, [Math.max(0, r.duration - 30), r.duration]);
   render(); toast('Preview stopped. The simulated take is available in this session.');
 }
 function addSimulatedRequest(r, input, options = {}) {
   const context = options.context || compileContext(state);
   const id = 'demo-' + String(state.requests.length + 1).padStart(3, '0');
-  const request = { id, sourceId: r.id, kind: 'Recognition', model: options.model || state.settings.asrModel, purpose: options.purpose || 'Simulated window', status: 'Complete', input, target: input, duration: `${(input[1] - input[0]).toFixed(1)} s`, latency: SIMULATION.requestLatency, format: SIMULATION.requestFormat, bytes: SIMULATION.requestBytes, created: new Date().toLocaleTimeString([], { hour12: false }), contextVersion: options.contextVersion ?? state.primer.version, prompt: context.prompt, keywords: context.keywords || [], text: options.text || currentBlocks(state).map(b => b.text).join(' ') || SIMULATION.repairedText, params: { model: options.model || state.settings.asrModel, response_format: 'json', stream: true, simulated: true }, events: [{ time: '+0 ms', event: 'Simulated request queued' }, { time: '+42 ms', event: 'Fixture audio associated' }, { time: '+1,620 ms', event: 'Illustrative result stored' }] };
-  state.requests.unshift(request); state.requestId = id; return request;
+  const request = { id, dictationId: r.id, kind: 'Recognition', model: options.model || state.settings.asrModel, purpose: options.purpose || 'Simulated window', status: 'Complete', input, target: input, duration: `${(input[1] - input[0]).toFixed(1)} s`, latency: SIMULATION.requestLatency, format: SIMULATION.requestFormat, bytes: SIMULATION.requestBytes, created: new Date().toLocaleTimeString([], { hour12: false }), contextVersion: options.contextVersion ?? state.primer.version, prompt: context.prompt, keywords: context.keywords || [], text: options.text || currentBlocks(state).map(b => b.text).join(' ') || SIMULATION.repairedText, params: { model: options.model || state.settings.asrModel, response_format: 'json', stream: true, simulated: true }, events: [{ time: '+0 ms', event: 'Simulated request queued' }, { time: '+42 ms', event: 'Fixture audio associated' }, { time: '+1,620 ms', event: 'Illustrative result stored' }] };
+  state.requests.unshift(request); registerRequest(state, request); state.requestId = id; return request;
 }
 
 function exportData() {
   const content = modalRoot.querySelector('#export-content').value; let format = modalRoot.querySelector('#export-format').value;
-  const r = currentRecording(state); const blocks = content === 'source' ? r.blocks : currentBlocks(state);
+  const r = currentDictation(state); const blocks = content === 'source' ? r.blocks : currentBlocks(state);
   let text;
-  if (content === 'evidence') { format = 'json'; text = JSON.stringify({ illustrative: true, recording: r.title, requests: state.requests.filter(q => q.sourceId === r.id) }, null, 2); }
+  if (content === 'evidence') { format = 'json'; text = JSON.stringify({ illustrative: true, recording: r.title, requests: state.requests.filter(q => q.dictationId === r.id) }, null, 2); }
   else if (format === 'json') text = JSON.stringify({ illustrative: true, title: r.title, version: state.version, blocks }, null, 2);
   else text = `${format === 'md' ? '# ' : ''}${r.title}\n\n${blocks.map(b => (format === 'md' && b.label ? '## ' + b.label + '\n\n' : '') + b.text).join('\n\n')}\n`;
   const url = URL.createObjectURL(new Blob([text], { type: format === 'json' ? 'application/json' : 'text/plain;charset=utf-8' }));
@@ -96,7 +97,22 @@ function exportData() {
 function action(name, el) {
   const id = el?.dataset.id, value = el?.dataset.value;
   switch (name) {
-    case 'page': state.page = value; render({ preserveScroll: false }); break;
+    case 'activity-reference': { const a = state.attempts.find(a => a.id === id); if (a) { selectJob(state, a.jobId); selectSpan(state, a.spanId); state.selectedAttemptId = a.id; state.page = 'jobs'; state.jobFilter = 'All'; state.jobDictationFilter = 'all'; state.jobQuery = ''; state.activityTab = 'spans'; render(); } break; }
+    case 'activity-job': selectJob(state, id); render(); break;
+    case 'activity-span': selectSpan(state, id); state.activityTab = 'spans'; render(); break;
+    case 'activity-attempt': { const a = state.attempts.find(a => a.id === id); state.selectedAttemptId = id; state.selectedSpanId = a.spanId; render(); break; }
+    case 'activity-tab': state.activityTab = value; render(); break;
+    case 'attempt-tab': state.attemptTab = value; render(); break;
+    case 'dictation-jobs': state.page = 'jobs'; state.jobDictationFilter = state.dictationId; state.jobFilter = 'All'; state.jobQuery = ''; selectJob(state, state.jobs.find(j => j.dictationId === state.dictationId)?.id); render(); break;
+    case 'new-job': openModal('new-job'); break;
+    case 'create-job': { const get = id => modalRoot.querySelector('#' + id).value; const result = createJob(state, { dictationId: get('job-dictation'), start: Number(get('job-start')), end: Number(get('job-end')), parts: get('job-plan') === 'single' ? 1 : Number(get('job-parts')), model: get('job-model'), contextPolicy: get('job-context'), output: get('job-output') }); if (!result.ok) { toast(result.reason); break; } state.page = 'jobs'; state.jobFilter = 'All'; state.jobDictationFilter = 'all'; state.jobQuery = ''; closeModal(); render(); toast('Job created. Queue attempts from its audio spans.'); break; }
+    case 'queue-attempt': case 'expand-attempt': { const result = queueAttempt(state, state.selectedJobId, id, { expanded: name === 'expand-attempt', currentContext: name === 'expand-attempt' }); render(); toast(result.ok ? 'Attempt queued. Earlier attempts and the document are unchanged.' : result.reason); break; }
+    case 'retry-failed': { const count = retryFailed(state, id); render(); toast(`Queued ${count} retry attempt${count === 1 ? '' : 's'}.`); break; }
+    case 'attempt-success': case 'attempt-failure': { const result = settleAttempt(state, id, name === 'attempt-success'); render(); toast(result.ok ? 'Simulated response stored as evidence. Document unchanged.' : result.reason); break; }
+    case 'activity-toggle-job': toggleJob(state, id); render(); break;
+    case 'cancel-job': cancelJob(state, id); render(); toast('Job cancelled. Earlier attempts and evidence retained.'); break;
+    case 'export-attempt': { const a = state.attempts.find(a => a.id === id); const payload = { illustrative: true, attempt: a, span: state.spans.find(p => p.id === a.spanId), blob: state.blobs.find(b => b.id === a.blobId), context: state.contextSnapshots.find(c => c.id === a.contextId) }; const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })); const link = document.createElement('a'); link.href = url; link.download = id + '.json'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); break; }
+    case 'page': state.page = value; if (value === 'jobs') state.playing = false; render({ preserveScroll: false }); break;
     case 'select-source': selectSource(id); break;
     case 'toggle-sidebar': state.sidebarOpen = !state.sidebarOpen; render(); break;
     case 'toggle-inspector': state.inspectorOpen = !state.inspectorOpen; state.focusMode = false; render(); break;
@@ -115,21 +131,20 @@ function action(name, el) {
       const plan = modalRoot.querySelector('#import-plan').value;
       const parts = Math.max(1, Math.min(100, Number(modalRoot.querySelector('#import-parts').value) || 20));
       const title = importedFileName || IMPORT_EXAMPLE.name;
-      const sourceId = 'import-' + (state.recordings.length + 1);
-      const example = structuredClone(state.recordings.find(r => r.id === 'interview'));
-      Object.assign(example, { id: sourceId, title, date: 'Just now', group: 'Today', duration: IMPORT_EXAMPLE.duration, status: 'Queued', tags: ['Imported'], blocks: [] });
-      state.recordings.unshift(example); state.documents[sourceId] = []; state.primers[sourceId] = { ...structuredClone(state.primer), version: 1, topic: 'Imported recording: ' + title, terms: [], recentSpeech: '' };
-      state.jobs.unshift({ id: 'job-' + (state.jobs.length + 1), title, subtitle: `Recognition · ${plan === 'single' ? 'one audio span' : parts + ' planned parts'}`, sourceId, model: state.settings.asrModel, progress: 0, state: 'Queued', requests: plan === 'single' ? 1 : parts, coverage: '00:00 / 120:00', sent: '00:00', context: state.settings.contextPolicy, result: destination === 'background' ? 'Background evidence' : 'New document' });
+      const dictationId = 'import-' + (state.dictations.length + 1);
+      const example = structuredClone(state.dictations.find(r => r.id === 'interview'));
+      Object.assign(example, { id: dictationId, title, date: 'Just now', group: 'Today', duration: IMPORT_EXAMPLE.duration, status: 'Queued', tags: ['Imported'], blocks: [] });
+      state.dictations.unshift(example); state.documents[dictationId] = []; state.primers[dictationId] = { ...structuredClone(state.primer), version: 1, topic: 'Imported recording: ' + title, terms: [], recentSpeech: '' };
+      createJob(state, { dictationId, start: 0, end: IMPORT_EXAMPLE.duration, parts: plan === 'single' ? 1 : parts, model: state.settings.asrModel === 'gpt-live-transcribe' ? 'gpt-transcribe' : state.settings.asrModel, contextPolicy: state.settings.contextPolicy, output: destination === 'background' ? 'Recognition evidence' : 'Review proposals' });
+      state.jobDictationFilter = 'all'; state.jobFilter = 'All'; state.jobQuery = '';
       closeModal();
-      if (destination === 'document') selectSource(sourceId); else { state.page = 'jobs'; render({ preserveScroll: false }); }
+      if (destination === 'document') selectSource(dictationId); else { state.page = 'jobs'; render({ preserveScroll: false }); }
       toast('Created a simulated import job. No file contents were read or uploaded.'); break;
     }
-    case 'toggle-job': { const j = state.jobs.find(j => j.id === id); j.state = j.state === 'Running' ? 'Paused' : 'Running'; render(); toast(`${j.state === 'Running' ? 'Resumed' : 'Paused'} the illustrative job.`); break; }
-    case 'inspect-job': { const j = state.jobs.find(j => j.id === id); if (state.recording && j.sourceId !== state.sourceId) { toast('Stop the recording preview before inspecting a different source.'); break; } state.sourceId = j.sourceId; state.primer = state.primers[j.sourceId] || state.primer; state.requestId = state.requests.find(r => r.sourceId === j.sourceId)?.id; showInspector('recognition'); render(); break; }
     case 'document-mode': state.documentMode = value; render(); break;
     case 'find': state.findOpen = !state.findOpen; if (!state.findOpen) state.findQuery = ''; render(); if (state.findOpen) root.querySelector('#document-find')?.focus(); break;
     case 'focus': state.focusMode = !state.focusMode; if (state.focusMode) state.inspectorOpen = false; render(); break;
-    case 'select-block': { const b = currentBlocks(state).find(b => b.id === id); state.selectedBlockId = id; if (b) state.position = b.start; const change = state.changes.find(c => c.blockId === id && c.state === 'pending'); showInspector(change ? 'changes' : 'recognition'); if (!change && b) state.requestId = state.requests.find(q => q.sourceId === state.sourceId && q.input[0] <= b.start && q.input[1] >= b.start)?.id || state.requestId; render(); scrollToBlock(id); break; }
+    case 'select-block': { const b = currentBlocks(state).find(b => b.id === id); state.selectedBlockId = id; if (b) state.position = b.start; const change = state.changes.find(c => c.blockId === id && c.state === 'pending'); showInspector(change ? 'changes' : 'recognition'); if (!change && b) state.requestId = state.requests.find(q => q.dictationId === state.dictationId && q.input[0] <= b.start && q.input[1] >= b.start)?.id || state.requestId; render(); scrollToBlock(id); break; }
     case 'accept-change': { const result = applyChange(state, id); render(); toast(result.ok ? 'Correction accepted. The original evidence is preserved.' : result.reason); break; }
     case 'dismiss-change': { snapshotEdit(state); const c = state.changes.find(c => c.id === id); c.state = 'dismissed'; render(); toast('Kept your original wording.'); break; }
     case 'undo': if (undoEdit(state)) { render(); toast('Last document change undone.'); } else toast('No document edits to undo.'); break;
@@ -141,25 +156,25 @@ function action(name, el) {
     case 'context-tab': state.contextTab = value; render(); break;
     case 'save-topic': state.primer.topic = root.querySelector('#topic-editor').value.trim(); state.primer.version++; render(); toast(`Primer v${state.primer.version} will be used for future requests.`); break;
     case 'add-term': openModal('add-term'); break;
-    case 'save-term': { const text = modalRoot.querySelector('#term-name').value.trim(); if (!text) { toast('Enter a term first.'); modalRoot.querySelector('#term-name').focus(); break; } if (state.primer.terms.some(t => t.text.toLowerCase() === text.toLowerCase())) { toast('That term is already in this primer.'); break; } state.primer.terms.push({ id: 'term-' + Date.now(), text, meaning: modalRoot.querySelector('#term-meaning').value.trim(), origin: 'You confirmed', state: 'active' }); state.primer.version++; closeModal(); render(); toast('Term added to this recording’s primer.'); break; }
+    case 'save-term': { const text = modalRoot.querySelector('#term-name').value.trim(); if (!text) { toast('Enter a term first.'); modalRoot.querySelector('#term-name').focus(); break; } if (state.primer.terms.some(t => t.text.toLowerCase() === text.toLowerCase())) { toast('That term is already in this primer.'); break; } state.primer.terms.push({ id: 'term-' + Date.now(), text, meaning: modalRoot.querySelector('#term-meaning').value.trim(), origin: 'You confirmed', state: 'active' }); state.primer.version++; closeModal(); render(); toast('Term added to this dictation’s primer.'); break; }
     case 'approve-term': { const t = state.primer.terms.find(t => t.id === id); t.state = 'active'; t.origin = 'You confirmed'; state.primer.version++; render(); toast('Term confirmed for future recognition and correction.'); break; }
     case 'remove-term': state.primer.terms = state.primer.terms.filter(t => t.id !== id); state.primer.version++; render(); break;
     case 'add-tag': openModal('add-tag'); break;
-    case 'save-tag': { const text = modalRoot.querySelector('#tag-name').value.trim(); if (text) { const r = currentRecording(state); if (!r.tags.includes(text)) r.tags.push(text); closeModal(); render(); } break; }
+    case 'save-tag': { const text = modalRoot.querySelector('#tag-name').value.trim(); if (text) { const r = currentDictation(state); if (!r.tags.includes(text)) r.tags.push(text); closeModal(); render(); } break; }
     case 'tag': state.libraryQuery = value; render(); break;
     case 'new-recording': case 'record': beginRecording(); break;
-    case 'play': if (state.recording) state.recordingPaused = !state.recordingPaused; else { if (state.position >= currentRecording(state).duration) state.position = 0; state.playing = !state.playing; } render(); if (state.playing) toast('Visual playback preview. No audio is included in the fixtures.'); break;
+    case 'play': if (state.recording) state.recordingPaused = !state.recordingPaused; else { if (state.position >= currentDictation(state).duration) state.position = 0; state.playing = !state.playing; } render(); if (state.playing) toast('Visual playback preview. No audio is included in the fixtures.'); break;
     case 'skip-back': setPosition(state.position - 5); break;
     case 'skip-forward': setPosition(state.position + 5); break;
     case 'seek': setPosition(Number(el.dataset.time)); break;
     case 'speed': { const speeds = [.75, 1, 1.25, 1.5, 2]; state.speed = speeds[(speeds.indexOf(state.speed) + 1) % speeds.length]; render(); break; }
     case 'loop': state.loop = !state.loop; render(); toast(state.loop ? 'Looping the selected passage in the visual preview.' : 'Loop disabled.'); break;
     case 'volume': toast('This is a visual transport mock-up. No audio is played or recorded.'); break;
-    case 'marker': { const r = currentRecording(state); const pos = state.recording ? state.captureSeconds : state.position; r.markers.push({ time: pos, label: 'Marker ' + (r.markers.length + 1) }); render(); toast('Marker added at ' + time(pos)); break; }
+    case 'marker': { const r = currentDictation(state); const pos = state.recording ? state.captureSeconds : state.position; r.markers.push({ time: pos, label: 'Marker ' + (r.markers.length + 1) }); render(); toast('Marker added at ' + time(pos)); break; }
     case 'play-request': { const r = state.requests.find(q => q.id === id); state.position = r.input[0]; state.playbackRange = [...r.input]; state.playing = true; render(); toast('Previewing the submitted range visually; no sample audio is included.'); break; }
     case 'rerun': state.requestId = id; openModal('rerun'); break;
-    case 'confirm-rerun': { const original = state.requests.find(q => q.id === state.requestId); const model = modalRoot.querySelector('#rerun-model').value; const useOriginal = modalRoot.querySelector('#rerun-context').value === 'original'; const context = useOriginal ? model === 'gpt-4o-transcribe' ? { prompt: original.prompt + (original.keywords?.length ? '\n\nRelevant terms: ' + original.keywords.join(', ') : '') } : { prompt: original.prompt, keywords: [...original.keywords] } : compileContext({ ...state, settings: { ...state.settings, asrModel: model } }); addSimulatedRequest(currentRecording(state), [...original.input], { model, context, contextVersion: useOriginal ? original.contextVersion : state.primer.version, text: original.text, purpose: 'Manual comparison · simulated' }); closeModal(); state.requestTab = 'response'; render(); toast('Added an independent simulated result. Earlier evidence is unchanged.'); break; }
-    case 'simulate-request': { const r = currentRecording(state); addSimulatedRequest(r, [0, Math.min(r.duration || 30, 30)]); render(); toast('Added an illustrative recognition result.'); break; }
+    case 'confirm-rerun': { const original = state.requests.find(q => q.id === state.requestId); const model = modalRoot.querySelector('#rerun-model').value; const useOriginal = modalRoot.querySelector('#rerun-context').value === 'original'; const context = useOriginal ? model === 'gpt-4o-transcribe' ? { prompt: original.prompt + (original.keywords?.length ? '\n\nRelevant terms: ' + original.keywords.join(', ') : '') } : { prompt: original.prompt, keywords: [...original.keywords] } : compileContext({ ...state, settings: { ...state.settings, asrModel: model } }); addSimulatedRequest(currentDictation(state), [...original.input], { model, context, contextVersion: useOriginal ? original.contextVersion : state.primer.version, text: original.text, purpose: 'Manual comparison · simulated' }); closeModal(); state.requestTab = 'response'; render(); toast('Added an independent simulated result. Earlier evidence is unchanged.'); break; }
+    case 'simulate-request': { const r = currentDictation(state); addSimulatedRequest(r, [0, Math.min(r.duration || 30, 30)]); render(); toast('Added an illustrative recognition result.'); break; }
     case 'reset-demo': state = createState(); importedFileName = ''; render({ preserveScroll: false }); toast('Sample workspace reset.'); break;
   }
 }
@@ -168,13 +183,14 @@ document.addEventListener('click', ev => {
   const el = ev.target.closest('[data-action]');
   if (el) { if (el.dataset.action === 'backdrop') { if (ev.target === el) closeModal(); return; } action(el.dataset.action, el); return; }
   const waveform = ev.target.closest('#waveform');
-  if (waveform && !state.recording) { const rect = waveform.getBoundingClientRect(); setPosition((ev.clientX - rect.left) / rect.width * currentRecording(state).duration); }
+  if (waveform && !state.recording) { const rect = waveform.getBoundingClientRect(); setPosition((ev.clientX - rect.left) / rect.width * currentDictation(state).duration); }
 });
 
 document.addEventListener('focusin', ev => { if (ev.target.matches('[data-edit-block][contenteditable]')) { ev.target.dataset.before = ev.target.textContent; ev.target.dataset.snapshotted = ''; } });
 document.addEventListener('input', ev => {
   const el = ev.target;
-  if (el.id === 'library-search') { const pos = el.selectionStart; state.libraryQuery = el.value; render(); const next = root.querySelector('#library-search'); next.focus(); next.setSelectionRange(pos, pos); }
+  if (el.id === 'job-search') { const pos = el.selectionStart; state.jobQuery = el.value; const jobs = visibleJobs(state); if (!jobs.some(j => j.id === state.selectedJobId)) selectJob(state, jobs[0]?.id); render(); const next = root.querySelector('#job-search'); next.focus(); next.setSelectionRange(pos, pos); }
+  else if (el.id === 'library-search') { const pos = el.selectionStart; state.libraryQuery = el.value; render(); const next = root.querySelector('#library-search'); next.focus(); next.setSelectionRange(pos, pos); }
   else if (el.id === 'document-find') { const pos = el.selectionStart; state.findQuery = el.value; render(); const next = root.querySelector('#document-find'); next.focus(); next.setSelectionRange(pos, pos); }
   else if (el.matches('[data-edit-block][contenteditable]')) {
     const block = currentBlocks(state).find(b => b.id === el.dataset.editBlock); if (!block) return;
@@ -188,7 +204,10 @@ document.addEventListener('input', ev => {
 });
 document.addEventListener('change', ev => {
   const el = ev.target;
-  if (el.id === 'request-select') { state.requestId = el.value; render(); }
+  if (el.dataset.activitySetting) { state[el.dataset.activitySetting] = el.value; if (['jobFilter', 'jobDictationFilter'].includes(el.dataset.activitySetting)) { const jobs = visibleJobs(state); if (!jobs.some(j => j.id === state.selectedJobId)) selectJob(state, jobs[0]?.id); } render(); }
+  else if (el.id === 'job-dictation') { modalRoot.querySelector('#job-end').value = state.dictations.find(d => d.id === el.value).duration; }
+  else if (el.id === 'job-plan') { modalRoot.querySelector('#job-parts').disabled = el.value === 'single'; }
+  else if (el.id === 'request-select') { state.requestId = el.value; render(); }
   else if (el.id === 'audio-file') { const f = el.files[0]; if (f) { importedFileName = f.name; modalRoot.querySelector('#import-name').textContent = f.name; modalRoot.querySelector('#import-meta').textContent = `${(f.size / 1e6).toFixed(1)} MB · metadata only · duration remains illustrative`; } }
   else if (el.dataset.setting) {
     const key = el.dataset.setting;
@@ -208,7 +227,8 @@ document.addEventListener('keydown', ev => {
   if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === 'f') { ev.preventDefault(); if (!state.findOpen) action('find'); else root.querySelector('#document-find')?.focus(); return; }
   if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === 'z' && !editing) { ev.preventDefault(); action('undo'); return; }
   if (editing) return;
-  if (ev.target.id === 'waveform' && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(ev.key)) { ev.preventDefault(); setPosition(ev.key === 'Home' ? 0 : ev.key === 'End' ? currentRecording(state).duration : state.position + (ev.key === 'ArrowLeft' ? -5 : 5)); return; }
+  if (ev.target.id === 'waveform' && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(ev.key)) { ev.preventDefault(); setPosition(ev.key === 'Home' ? 0 : ev.key === 'End' ? currentDictation(state).duration : state.position + (ev.key === 'ArrowLeft' ? -5 : 5)); return; }
+  if (state.page === 'jobs') return;
   const shortcuts = { ' ': 'play', r: 'record', m: 'marker', j: 'skip-back', l: 'skip-forward' };
   if (shortcuts[ev.key.toLowerCase()]) { ev.preventDefault(); action(shortcuts[ev.key.toLowerCase()]); }
   else if (ev.key === 'Escape') { state.inspectorOpen = false; state.sidebarOpen = false; render(); }
@@ -218,20 +238,20 @@ document.addEventListener('keydown', ev => {
 // Local, explicitly simulated transport. It never reads a device or calls a service.
 setInterval(() => {
   if (state.recording && !state.recordingPaused) {
-    state.captureSeconds += .5; state.position = state.captureSeconds; currentRecording(state).duration = state.captureSeconds;
+    state.captureSeconds += .5; state.position = state.captureSeconds; currentDictation(state).duration = state.captureSeconds;
     const phrase = LIVE_EXAMPLE.phrases[state.livePhraseIndex % LIVE_EXAMPLE.phrases.length];
     const words = phrase.split(' '); phraseTick++;
     const partial = root.querySelector('#live-partial'); if (partial) partial.textContent = words.slice(0, Math.max(1, phraseTick)).join(' ');
     if (phraseTick === words.length + 5) {
       const blocks = currentBlocks(state); const start = blocks.at(-1)?.end || 0;
       blocks.push({ id: 'live-' + blocks.length, start, end: state.captureSeconds, text: phrase }); state.livePhraseIndex++; phraseTick = 0;
-      addSimulatedRequest(currentRecording(state), [Math.max(0, state.captureSeconds - 30), state.captureSeconds], { text: phrase });
+      addSimulatedRequest(currentDictation(state), [Math.max(0, state.captureSeconds - 30), state.captureSeconds], { text: phrase });
       render();
     }
-    root.querySelector('.transport').outerHTML = transport(state);
+    if (root.querySelector('.transport')) root.querySelector('.transport').outerHTML = transport(state);
     updateTransport();
   } else if (state.playing) {
-    const r = currentRecording(state); state.position += .5 * state.speed;
+    const r = currentDictation(state); state.position += .5 * state.speed;
     if (state.playbackRange && state.position >= state.playbackRange[1]) { state.position = state.playbackRange[1]; state.playing = false; state.playbackRange = null; render(); }
     const selected = currentBlocks(state).find(b => b.id === state.selectedBlockId);
     if (state.loop && selected && state.position >= selected.end) state.position = selected.start;

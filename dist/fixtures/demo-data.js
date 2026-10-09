@@ -1,6 +1,7 @@
+import { createActivityFixtures, POLITICAL_DICTATION, POLITICAL_PRIMER } from './activity-data.js';
 /**
  * ILLUSTRATIVE DATA ONLY. No value in this file comes from an ASR/model service.
- * Keep recordings, text, waveforms, requests, usage, and simulated responses here.
+ * Keep dictations, text, waveforms, requests, usage, and simulated responses here.
  * UI modules consume this fixture through createDemoData(); fixtures are never mutated.
  */
 const waveform = (seed, count = 190) => Array.from({ length: count }, (_, i) => {
@@ -8,7 +9,7 @@ const waveform = (seed, count = 190) => Array.from({ length: count }, (_, i) => 
   return Math.round(5 + Math.abs(Math.sin(i * 2.71 + seed) * Math.cos(i * .37)) * 58 * envelope);
 });
 
-const recordings = [
+const dictations = [
   {
     id: 'architecture', title: 'A better dictation workspace', date: 'Today, 16:42', group: 'Today', duration: 272,
     type: 'Microphone', language: 'English', tags: ['Product', 'Architecture'], status: '2 to review',
@@ -59,21 +60,15 @@ const primer = {
 };
 
 const requests = [
-  { id: 'req-018', sourceId: 'architecture', kind: 'Recognition', model: 'gpt-transcribe', purpose: 'Expanded window', status: 'Complete', input: [18, 65], target: [24, 65], duration: '47.0 s', latency: '1.84 s', format: 'WAV · PCM16 · mono · 24 kHz', bytes: '2.26 MB', created: '16:43:07', contextVersion: 7, prompt: 'A technical discussion about the React frontend and audio pipeline of a speech dictation application. The preceding speech describes a simple, inspectable writing interface.', keywords: ['frontend', 'AudioWorklet', 'React'], text: 'With the frontend, we have another problem: the interface needs to feel simple while the system underneath stays completely inspectable. A clean page for the words. An audio bar that feels like an instrument. Everything else, one click away.', params: { model: 'gpt-transcribe', response_format: 'json', stream: true, languages: ['en'] }, events: [{ time: '+0 ms', event: 'Request queued' }, { time: '+42 ms', event: 'Audio submitted' }, { time: '+680 ms', event: 'First text received' }, { time: '+1,840 ms', event: 'Result stored' }] },
-  { id: 'req-017', sourceId: 'architecture', kind: 'Recognition', model: 'gpt-transcribe', purpose: 'Initial window', status: 'Complete', input: [24, 38], target: [24, 38], duration: '14.0 s', latency: '0.92 s', format: 'WAV · PCM16 · mono · 24 kHz', bytes: '672 KB', created: '16:42:40', contextVersion: 6, prompt: 'A discussion about building a speech dictation application.', keywords: ['React'], text: 'With the front end, we have another problem: the interface needs to feel simple while the system underneath stays completely inspectable.', params: { model: 'gpt-transcribe', response_format: 'json', stream: true, languages: ['en'] }, events: [{ time: '+0 ms', event: 'Request queued' }, { time: '+34 ms', event: 'Audio submitted' }, { time: '+390 ms', event: 'First text received' }, { time: '+920 ms', event: 'Result stored' }] },
-  { id: 'req-023', sourceId: 'architecture', kind: 'Recognition', model: 'gpt-4o-transcribe', purpose: 'Second listening', status: 'Complete', input: [98, 156], target: [105, 150], duration: '58.0 s', latency: '2.31 s', format: 'WAV · PCM16 · mono · 24 kHz', bytes: '2.78 MB', created: '16:44:41', contextVersion: 7, prompt: 'A software architecture discussion. Preserve the speaker’s wording, including negations and self-corrections. The current subject is protection of manual edits.', keywords: [], text: 'We should not automatically replace a passage that I’ve already edited. Every machine suggestion needs to know which version it was based on, and every manual change needs to remain mine.', params: { model: 'gpt-4o-transcribe', response_format: 'json', stream: true, include: ['logprobs'] }, events: [{ time: '+0 ms', event: 'Request queued' }, { time: '+51 ms', event: 'Audio submitted' }, { time: '+860 ms', event: 'First text received' }, { time: '+2,310 ms', event: 'Result stored' }] },
-  { id: 'req-031', sourceId: 'interview', kind: 'Recognition', model: 'gpt-transcribe', purpose: 'Partitioned import', status: 'Complete', input: [0, 395], target: [0, 395], duration: '6 min 35 s', latency: '9.62 s', format: 'WebM · Opus · mono', bytes: '3.16 MB', created: '11:08:14', contextVersion: 2, prompt: 'A customer research interview about onboarding and reviewing dictated text.', keywords: [], text: 'When I opened the workspace, I knew where to start. The recording button was easy to find.', params: { model: 'gpt-transcribe', stream: false, languages: ['en'] }, events: [{ time: '+0 ms', event: 'Request queued' }, { time: '+220 ms', event: 'Audio submitted' }, { time: '+9,620 ms', event: 'Result stored' }] }
+  { id: 'req-018', dictationId: 'architecture', kind: 'Recognition', model: 'gpt-transcribe', purpose: 'Expanded window', status: 'Complete', input: [18, 65], target: [24, 65], duration: '47.0 s', latency: '1.84 s', format: 'WAV · PCM16 · mono · 24 kHz', bytes: '2.26 MB', created: '16:43:07', contextVersion: 7, prompt: 'A technical discussion about the React frontend and audio pipeline of a speech dictation application. The preceding speech describes a simple, inspectable writing interface.', keywords: ['frontend', 'AudioWorklet', 'React'], text: 'With the frontend, we have another problem: the interface needs to feel simple while the system underneath stays completely inspectable. A clean page for the words. An audio bar that feels like an instrument. Everything else, one click away.', params: { model: 'gpt-transcribe', response_format: 'json', stream: true, languages: ['en'] }, events: [{ time: '+0 ms', event: 'Request queued' }, { time: '+42 ms', event: 'Audio submitted' }, { time: '+680 ms', event: 'First text received' }, { time: '+1,840 ms', event: 'Result stored' }] },
+  { id: 'req-017', dictationId: 'architecture', kind: 'Recognition', model: 'gpt-transcribe', purpose: 'Initial window', status: 'Complete', input: [24, 38], target: [24, 38], duration: '14.0 s', latency: '0.92 s', format: 'WAV · PCM16 · mono · 24 kHz', bytes: '672 KB', created: '16:42:40', contextVersion: 6, prompt: 'A discussion about building a speech dictation application.', keywords: ['React'], text: 'With the front end, we have another problem: the interface needs to feel simple while the system underneath stays completely inspectable.', params: { model: 'gpt-transcribe', response_format: 'json', stream: true, languages: ['en'] }, events: [{ time: '+0 ms', event: 'Request queued' }, { time: '+34 ms', event: 'Audio submitted' }, { time: '+390 ms', event: 'First text received' }, { time: '+920 ms', event: 'Result stored' }] },
+  { id: 'req-023', dictationId: 'architecture', kind: 'Recognition', model: 'gpt-4o-transcribe', purpose: 'Second listening', status: 'Complete', input: [98, 156], target: [105, 150], duration: '58.0 s', latency: '2.31 s', format: 'WAV · PCM16 · mono · 24 kHz', bytes: '2.78 MB', created: '16:44:41', contextVersion: 7, prompt: 'A software architecture discussion. Preserve the speaker’s wording, including negations and self-corrections. The current subject is protection of manual edits.', keywords: [], text: 'We should not automatically replace a passage that I’ve already edited. Every machine suggestion needs to know which version it was based on, and every manual change needs to remain mine.', params: { model: 'gpt-4o-transcribe', response_format: 'json', stream: true, include: ['logprobs'] }, events: [{ time: '+0 ms', event: 'Request queued' }, { time: '+51 ms', event: 'Audio submitted' }, { time: '+860 ms', event: 'First text received' }, { time: '+2,310 ms', event: 'Result stored' }] },
+  { id: 'req-031', dictationId: 'interview', kind: 'Recognition', model: 'gpt-transcribe', purpose: 'Partitioned import', status: 'Complete', input: [0, 395], target: [0, 395], duration: '6 min 35 s', latency: '9.62 s', format: 'WebM · Opus · mono', bytes: '3.16 MB', created: '11:08:14', contextVersion: 2, prompt: 'A customer research interview about onboarding and reviewing dictated text.', keywords: [], text: 'When I opened the workspace, I knew where to start. The recording button was easy to find.', params: { model: 'gpt-transcribe', stream: false, languages: ['en'] }, events: [{ time: '+0 ms', event: 'Request queued' }, { time: '+220 ms', event: 'Audio submitted' }, { time: '+9,620 ms', event: 'Result stored' }] }
 ];
 
 const changes = [
-  { id: 'change-1', sourceId: 'architecture', blockId: 'a2', type: 'Terminology', title: 'One word, the right context', before: 'front end', after: 'frontend', explanation: 'The expanded audio window and your confirmed terminology both refer to the application’s user interface.', evidence: ['req-017', 'req-018'], time: [24, 65], state: 'pending', model: 'gpt-4.1-mini', baseVersion: 'v12' },
-  { id: 'change-2', sourceId: 'architecture', blockId: 'a4', type: 'Meaning', title: 'A missing “not” changes the intent', before: 'should automatically', after: 'should not automatically', explanation: 'The second listening includes “not”. Compare the request evidence before accepting this change.', evidence: ['req-023'], time: [105, 150], state: 'pending', model: 'gpt-4.1-mini', baseVersion: 'v12' }
-];
-
-const jobs = [
-  { id: 'job-01', title: 'A better dictation workspace', subtitle: 'Recognition · growing windows', model: 'gpt-transcribe', sourceId: 'architecture', progress: 100, state: 'Complete', requests: 23, coverage: '04:32 / 04:32', sent: '11:18', context: 'Latest available', result: 'Document + evidence' },
-  { id: 'job-02', title: 'Customer interview · onboarding', subtitle: 'Recognition · partitioned audio', model: 'gpt-transcribe', sourceId: 'interview', progress: 68, state: 'Running', requests: 8, coverage: '12:18 / 18:06', sent: '12:18', context: 'Fixed snapshot', result: 'Background evidence' },
-  { id: 'job-03', title: 'Recognition repair', subtitle: 'Text revision · 2 proposed changes', model: 'gpt-4.1-mini', sourceId: 'architecture', progress: 100, state: 'Complete', requests: 1, coverage: '02:30 / 04:32', sent: '—', context: 'Primer v7', result: 'Review queue' }
+  { id: 'change-1', dictationId: 'architecture', blockId: 'a2', type: 'Terminology', title: 'Terminology correction', before: 'front end', after: 'frontend', explanation: 'The expanded audio window and your confirmed terminology both refer to the application’s user interface.', evidence: ['req-017', 'req-018'], time: [24, 65], state: 'pending', model: 'gpt-4.1-mini', baseVersion: 'v12' },
+  { id: 'change-2', dictationId: 'architecture', blockId: 'a4', type: 'Meaning', title: 'Possible missing negation', before: 'should automatically', after: 'should not automatically', explanation: 'The second listening includes “not”. Compare the request evidence before accepting this change.', evidence: ['req-023'], time: [105, 150], state: 'pending', model: 'gpt-4.1-mini', baseVersion: 'v12' }
 ];
 
 const models = [
@@ -89,12 +84,15 @@ export const IMPORT_EXAMPLE = { name: 'Product strategy workshop.m4a', duration:
 export const SIMULATION = { requestLatency: '1.62 s', requestBytes: '1.44 MB', requestFormat: 'WAV · PCM16 · mono · 24 kHz', repairedText: 'The interface needs to feel simple while the system underneath stays completely inspectable.', audioDeviceLevel: -18.4 };
 export const NEW_PRIMER_TOPIC = 'A new dictation about a calm, inspectable writing experience.';
 export function createDemoData() {
-  const data = structuredClone({ recordings, primer, requests, changes, jobs, models });
+  const data = structuredClone({ dictations, primer, requests, changes, models });
   data.primers = {
     architecture: data.primer,
-    interview: { version: 2, topic: 'Customer research about onboarding and the first recording experience.', scope: 'This recording · current topic', languages: ['English'], recentSpeech: recordings[1].blocks[0].text, terms: [] },
-    planning: { version: 1, topic: 'Planning the next product milestone and reviewing design priorities.', scope: 'This recording · current topic', languages: ['English'], recentSpeech: recordings[2].blocks[0].text, terms: [] }
+    interview: { version: 2, topic: 'Customer research about onboarding and the first recording experience.', scope: 'This recording · current topic', languages: ['English'], recentSpeech: dictations[1].blocks[0].text, terms: [] },
+    planning: { version: 1, topic: 'Planning the next product milestone and reviewing design priorities.', scope: 'This recording · current topic', languages: ['English'], recentSpeech: dictations[2].blocks[0].text, terms: [] }
   };
+  data.dictations.unshift(structuredClone(POLITICAL_DICTATION));
+  data.primers.political = structuredClone(POLITICAL_PRIMER);
+  Object.assign(data, createActivityFixtures(data));
   return data;
 }
 
