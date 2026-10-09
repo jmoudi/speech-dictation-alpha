@@ -10,7 +10,7 @@ test('accepting a correction preserves recognition evidence and supports undo', 
   assert.deepEqual(s.dictations, original); assert.deepEqual(s.requests, evidence);
   assert.equal(applyChange(s, 'change-1').ok, false);
   assert.equal(undoEdit(s), true); assert.match(s.documents.architecture[1].text, /front end/);
-  assert.equal(s.changes[0].state, 'pending'); assert.equal(s.version, 12);
+  assert.equal(s.changes[0].state, 'pending'); assert.equal(s.version, 14);
 });
 
 test('manual edits and stale passages cannot be overwritten by proposals', () => {

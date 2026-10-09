@@ -1,3 +1,5 @@
+import { initializeDocuments } from './document-state.js';
+export { snapshotEdit, undoEdit, applyChange, documentState } from './document-state.js';
 import { activityInitialState } from './activity-store.js';
 import { createDemoData, DEMO_SETTINGS } from '../fixtures/demo-data.js';
 
@@ -5,25 +7,13 @@ export const MODEL_OPTIONS = ['gpt-transcribe', 'gpt-4o-transcribe', 'gpt-live-t
 export const STRATEGIES = { single: 'One audio span', partitioned: 'Partitioned audio', growing: 'Growing windows', native: 'Native live session' };
 export function createState() {
   const data = createDemoData();
-  return { ...data, ...activityInitialState(), settings: { ...DEMO_SETTINGS }, dictationId: 'architecture', page: 'jobs', inspector: 'changes', inspectorOpen: true, sidebarOpen: false, requestId: 'req-018', requestTab: 'details', contextTab: 'primer', contextRequestId: null, documentMode: 'working', libraryQuery: '', findQuery: '', findOpen: false, selectedBlockId: 'a2', playing: false, position: 42, speed: 1, loop: false, recording: false, recordingPaused: false, captureSeconds: 0, livePhraseIndex: 0, settingsTab: 'models', modal: null, changeFilter: 'pending', documents: Object.fromEntries(data.dictations.map(r => [r.id, structuredClone(r.blocks)])), editedBlocks: new Set(), undoStack: [], version: 12, focusMode: false, zoom: 1 };
+  const state = { ...data, ...activityInitialState(), settings: { ...DEMO_SETTINGS }, dictationId: 'architecture', page: 'review', inspector: 'changes', inspectorOpen: true, sidebarOpen: false, requestId: 'req-018', requestTab: 'details', contextTab: 'primer', contextRequestId: null, documentMode: 'working', libraryQuery: '', findQuery: '', findOpen: false, selectedBlockId: 'a2', playing: false, position: 42, speed: 1, loop: false, recording: false, recordingPaused: false, captureSeconds: 0, livePhraseIndex: 0, settingsTab: 'models', modal: null, changeFilter: 'pending', documents: Object.fromEntries(data.dictations.map(r => [r.id, structuredClone(r.blocks)])), editedBlocks: new Set(), assemblies: [], selectedAssemblyId: null, assemblyMode: 'gaps', revisionMode: 'repair', selectedDerivedId: null, reviewDecisions: {}, reviewFilter: 'Pending', reviewScope: 'all', reviewRisk: 'All', selectedReviewId: null, reviewSearch: '', focusMode: false, zoom: 1 };
+  for (const c of state.changes) { c.mode = 'repair'; c.baseText = state.documents[c.dictationId]?.find(b => b.id === c.blockId)?.text; }
+  initializeDocuments(state); return state;
 }
 export function currentDictation(state) { return state.dictations.find(r => r.id === state.dictationId); }
 export function currentBlocks(state) { return state.documents[state.dictationId] || []; }
 export function pendingChanges(state) { return state.changes.filter(c => c.dictationId === state.dictationId && c.state === 'pending'); }
-export function snapshotEdit(state) { state.undoStack.push({ documents: structuredClone(state.documents), changes: structuredClone(state.changes), editedBlocks: new Set(state.editedBlocks), version: state.version }); }
-export function applyChange(state, id) {
-  const change = state.changes.find(c => c.id === id);
-  if (!change || change.state !== 'pending') return { ok: false, reason: 'This change is no longer pending.' };
-  const block = state.documents[change.dictationId]?.find(b => b.id === change.blockId);
-  if (!block || !block.text.includes(change.before) || state.editedBlocks.has(block.id)) return { ok: false, reason: 'This passage was edited. Your text is protected; the suggestion remains available.' };
-  snapshotEdit(state);
-  block.text = block.text.replace(change.before, change.after);
-  block.revised = true;
-  change.state = 'accepted';
-  state.version++;
-  return { ok: true };
-}
-export function undoEdit(state) { const old = state.undoStack.pop(); if (!old) return false; Object.assign(state, old); return true; }
 export function setModel(state, model) {
   if (!MODEL_OPTIONS.includes(model)) return;
   state.settings.asrModel = model;

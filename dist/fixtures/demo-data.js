@@ -1,3 +1,4 @@
+import { addRevisionFixtures } from './revision-data.js';
 import { createActivityFixtures, POLITICAL_DICTATION, POLITICAL_PRIMER } from './activity-data.js';
 /**
  * ILLUSTRATIVE DATA ONLY. No value in this file comes from an ASR/model service.
@@ -93,6 +94,7 @@ export function createDemoData() {
   data.dictations.unshift(structuredClone(POLITICAL_DICTATION));
   data.primers.political = structuredClone(POLITICAL_PRIMER);
   Object.assign(data, createActivityFixtures(data));
+  addRevisionFixtures(data);
   return data;
 }
 

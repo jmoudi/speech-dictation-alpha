@@ -1,3 +1,5 @@
+import { documentState, journal, recordManualRevision } from './document-state.js';
+import { buildAssembly, applyAssemblyStep, applyReadyAssembly, createRevision, currentDerived, reviewItems, chooseReviewEvidence } from './revision-store.js';
 import { comparisonPair, preferAttempt, gapExecution } from './evidence.js';
 import { selectJob, selectSpan, queueAttempt, retryFailed, settleAttempt, cancelJob, toggleJob, createJob, visibleJobs, registerRequest, dispatchReady } from './activity-store.js';
 import { createState, currentDictation, currentBlocks, pendingChanges, applyChange, undoEdit, snapshotEdit, setModel, compileContext, wordCount, time } from './store.js';
@@ -20,13 +22,13 @@ function toast(message) {
 function focusKey(el) {
   if (!el) return null;
   if (el.id) return '#' + CSS.escape(el.id);
-  const keys = ['action', 'id', 'value', 'setting', 'activitySetting', 'compareSide'];
+  const keys = ['action', 'id', 'value', 'setting', 'activitySetting', 'compareSide', 'reviewSetting'];
   const parts = keys.filter(key => el.dataset?.[key] !== undefined).map(key => `[data-${key.replace(/[A-Z]/g, c => '-' + c.toLowerCase())}="${CSS.escape(el.dataset[key])}"]`);
   return parts.length ? el.tagName.toLowerCase() + parts.join('') : null;
 }
 function render({ preserveScroll = true } = {}) {
   const focus = root.contains(document.activeElement) ? focusKey(document.activeElement) : null;
-  const scrolls = preserveScroll ? [...root.querySelectorAll('.document-scroll,.inspector-scroll,.recording-list,.job-detail-scroll,.job-list,.attempt-inspector-body')].map(el => [el.className, el.scrollTop]) : [];
+  const scrolls = preserveScroll ? [...root.querySelectorAll('.document-scroll,.inspector-scroll,.recording-list,.job-detail-scroll,.job-list,.attempt-inspector-body,.review-list,.review-detail-scroll')].map(el => [el.className, el.scrollTop]) : [];
   root.innerHTML = renderApp(state);
   document.body.classList.toggle('theme-dark', state.settings.theme === 'dark');
   document.body.classList.toggle('text-large', state.settings.fontSize === 'large');
@@ -37,10 +39,10 @@ function render({ preserveScroll = true } = {}) {
 
 function renderModal() {
   const focus = modalRoot.contains(document.activeElement) ? focusKey(document.activeElement) : null;
-  const oldScroll = modalRoot.querySelector('.settings-content')?.scrollTop || 0;
+  const oldScroll = modalRoot.querySelector('.settings-content,.workflow-modal-body')?.scrollTop || 0;
   modalRoot.innerHTML = modalView(state);
   root.inert = Boolean(state.modal);
-  modalRoot.querySelector('.settings-content')?.scrollTo(0, oldScroll);
+  modalRoot.querySelector('.settings-content,.workflow-modal-body')?.scrollTo(0, oldScroll);
   if (focus && state.modal) modalRoot.querySelector(focus)?.focus({ preventScroll: true });
 }
 
@@ -56,9 +58,9 @@ function closeModal() { state.modal = null; renderModal(); if (lastFocus?.isConn
 function showInspector(tab) { state.inspector = tab; state.inspectorOpen = true; state.focusMode = false; }
 function selectSource(id) {
   if (state.recording && id !== state.dictationId) { toast('Stop the recording preview before switching sources.'); return; }
-  state.playbackRange = null; state.dictationId = id; state.page = 'studio'; state.position = 0; state.playing = false; state.selectedBlockId = null; state.sidebarOpen = false; state.contextRequestId = null;
+  state.documentMode = 'working'; state.playbackRange = null; state.dictationId = id; state.page = 'studio'; state.position = 0; state.playing = false; state.selectedBlockId = null; state.sidebarOpen = false; state.contextRequestId = null;
   state.requestId = state.requests.find(r => r.dictationId === id)?.id || null;
-  state.primer = state.primers[id] || state.primer;
+  state.primer = state.primers[id] || state.primer; state.selectedDerivedId = documentState(state).derived.at(-1)?.id || null;
   render({ preserveScroll: false });
 }
 function scrollToBlock(id) { requestAnimationFrame(() => root.querySelector(`[data-block="${CSS.escape(id)}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })); }
@@ -79,7 +81,7 @@ function beginRecording() {
   if (state.recording) { stopRecording(); return; }
   let r = state.dictations.find(r => r.id === LIVE_EXAMPLE.id);
   if (!r) { r = structuredClone(LIVE_EXAMPLE); delete r.phrases; state.dictations.unshift(r); state.documents[r.id] = []; state.primers[r.id] = { ...structuredClone(state.primer), version: 1, topic: NEW_PRIMER_TOPIC, recentSpeech: '', terms: [] }; }
-  state.dictationId = r.id; state.primer = state.primers[r.id]; state.recording = true; state.recordingPaused = false; state.playing = false; phraseTick = 0; state.captureSeconds = r.duration; state.position = r.duration; state.livePhraseIndex = state.documents[r.id].length; state.page = 'studio'; state.inspector = 'recognition'; state.requestId = null; state.sidebarOpen = false;
+  state.documentMode = 'working'; state.dictationId = r.id; state.primer = state.primers[r.id]; state.recording = true; state.recordingPaused = false; state.playing = false; phraseTick = 0; state.captureSeconds = r.duration; state.position = r.duration; state.livePhraseIndex = state.documents[r.id].length; state.page = 'studio'; state.inspector = 'recognition'; state.requestId = null; state.sidebarOpen = false;
   render({ preserveScroll: false }); toast('Recording preview started. No microphone is being accessed.');
 }
 function stopRecording() {
@@ -104,20 +106,20 @@ function updateRetryPreview() {
 
 function exportData() {
   const content = modalRoot.querySelector('#export-content').value; let format = modalRoot.querySelector('#export-format').value;
-  const r = currentDictation(state); const blocks = content === 'source' ? r.blocks : currentBlocks(state);
+  const r = currentDictation(state); const blocks = content === 'source' ? r.blocks : content === 'derived' ? currentDerived(state)?.blocks || [] : currentBlocks(state);
   let text;
-  if (content === 'evidence') { format = 'json'; text = JSON.stringify({ illustrative: true, recording: r.title, requests: state.requests.filter(q => q.dictationId === r.id) }, null, 2); }
-  else if (format === 'json') text = JSON.stringify({ illustrative: true, title: r.title, version: state.version, blocks }, null, 2);
+  if (content === 'evidence') { format = 'json'; text = JSON.stringify({ illustrative: true, dictation: r.title, document: currentBlocks(state), revisions: documentState(state).history, journal: documentState(state).journal, attempts: state.attempts.filter(a => state.spans.some(p => p.dictationId === r.id && p.id === a.spanId)), requests: state.requests.filter(q => q.dictationId === r.id) }, null, 2); }
+  else if (format === 'json') text = JSON.stringify({ illustrative: true, title: r.title, version: content === 'derived' ? currentDerived(state)?.baseVersion : state.version, derived: content === 'derived' ? currentDerived(state)?.id : undefined, blocks }, null, 2);
   else text = `${format === 'md' ? '# ' : ''}${r.title}\n\n${blocks.map(b => (format === 'md' && b.label ? '## ' + b.label + '\n\n' : '') + b.text).join('\n\n')}\n`;
   const url = URL.createObjectURL(new Blob([text], { type: format === 'json' ? 'application/json' : 'text/plain;charset=utf-8' }));
-  const a = document.createElement('a'); a.href = url; a.download = r.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') + '.' + format; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+  const a = document.createElement('a'); a.href = url; a.download = r.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') + (content === 'derived' ? '-editorial-draft' : '') + '.' + format; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
   closeModal(); toast('Exported the current sample document.');
 }
 
 function action(name, el) {
   const id = el?.dataset.id, value = el?.dataset.value;
   switch (name) {
-    case 'activity-reference': { const a = state.attempts.find(a => a.id === id); if (a) { selectJob(state, a.jobId); selectSpan(state, a.spanId); state.selectedAttemptId = a.id; state.activityInspectorOpen = true; state.page = 'jobs'; state.jobFilter = 'All'; state.jobDictationFilter = 'all'; state.jobQuery = ''; state.activityTab = 'spans'; render(); } break; }
+    case 'activity-reference': { if (state.modal) closeModal(); const a = state.attempts.find(a => a.id === id); if (a) { selectJob(state, a.jobId); selectSpan(state, a.spanId); state.selectedAttemptId = a.id; state.activityInspectorOpen = true; state.page = 'jobs'; state.jobFilter = 'All'; state.jobDictationFilter = 'all'; state.jobQuery = ''; state.activityTab = 'spans'; render(); } break; }
     case 'toggle-activity-inspector': state.activityInspectorOpen = !state.activityInspectorOpen; render(); break;
     case 'compare-span': selectSpan(state, id); state.activityTab = 'compare'; render(); break;
     case 'prefer-evidence': { const result = preferAttempt(state, id); render(); toast(result.ok ? 'Preferred evidence recorded. Review document edits separately.' : result.reason); break; }
@@ -139,12 +141,26 @@ function action(name, el) {
     case 'activity-toggle-job': toggleJob(state, id); render(); break;
     case 'cancel-job': cancelJob(state, id); render(); toast('Job cancelled. Earlier attempts and evidence retained.'); break;
     case 'export-attempt': { const a = state.attempts.find(a => a.id === id); const payload = { illustrative: true, attempt: a, span: state.spans.find(p => p.id === a.spanId), blob: state.blobs.find(b => b.id === a.blobId), context: state.contextSnapshots.find(c => c.id === a.contextId) }; const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })); const link = document.createElement('a'); link.href = url; link.download = id + '.json'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); break; }
-    case 'page': state.page = value; if (value === 'jobs') state.playing = false; render({ preserveScroll: false }); break;
+    case 'page': state.page = value; if (['jobs', 'review'].includes(value)) state.playing = false; render({ preserveScroll: false }); break;
     case 'select-source': selectSource(id); break;
     case 'toggle-sidebar': state.sidebarOpen = !state.sidebarOpen; render(); break;
     case 'toggle-inspector': state.inspectorOpen = !state.inspectorOpen; state.focusMode = false; render(); break;
     case 'inspector': showInspector(value); state.contextRequestId = null; render(); break;
-    case 'review': showInspector('changes'); state.changeFilter = 'pending'; render(); break;
+    case 'review': state.page = 'review'; state.playing = false; state.reviewScope = state.dictationId; state.reviewFilter = 'Pending'; state.reviewRisk = 'All'; state.reviewSearch = ''; render(); break;
+    case 'select-review': state.selectedReviewId = id; render(); break;
+    case 'review-choose': { const result = chooseReviewEvidence(state, el.dataset.reviewId, id); if (result.ok) state.selectedReviewId = reviewItems(state).find(i => i.planId === result.plan.id)?.id || el.dataset.reviewId; render(); toast(result.ok ? 'Source selected. Review the proposed document update separately.' : result.reason); break; }
+    case 'review-apply-assembly': { const item = reviewItems(state).find(i => i.id === id); const result = item ? applyAssemblyStep(state, item.planId, item.stepId) : { ok: false, reason: 'This proposal is no longer pending.' }; render(); toast(result.ok ? 'Document update applied with attempt provenance.' : result.reason); break; }
+    case 'review-audio': { const item = reviewItems(state).find(i => i.id === id); if (!item || state.recording && item.dictationId !== state.dictationId) { toast('Stop the capture preview before switching dictations.'); break; } selectSource(item.dictationId); state.position = item.range[0]; state.playbackRange = [...item.range]; state.playing = true; render(); toast('Target interval selected. Playback is visual; fixtures contain no audio.'); break; }
+    case 'assembly': case 'assembly-dictation': { if (state.recording) { toast('Stop the capture preview before building an assembly proposal.'); break; } if (name === 'assembly-dictation' && id !== state.dictationId) selectSource(id); const plan = state.assemblies.find(p => p.id === state.selectedAssemblyId && p.dictationId === state.dictationId) || state.assemblies.filter(p => p.dictationId === state.dictationId).at(-1); if (plan) state.selectedAssemblyId = plan.id; else buildAssembly(state, state.dictationId, { mode: state.assemblyMode }); openModal('assembly'); break; }
+    case 'rebuild-assembly': state.assemblyMode = modalRoot.querySelector('#assembly-scope').value; buildAssembly(state, state.dictationId, { mode: state.assemblyMode }); render(); break;
+    case 'apply-assembly-step': { const result = applyAssemblyStep(state, state.selectedAssemblyId, id); render(); toast(result.ok ? 'Passage applied. Source evidence retained.' : result.reason); break; }
+    case 'apply-ready-assembly': { const result = applyReadyAssembly(state, state.selectedAssemblyId); render(); toast(result.ok ? `Applied ${result.applied} ready passages. Blocked spans remain for review.` : result.reason); break; }
+    case 'open-span-review': closeModal(); state.page = 'review'; state.reviewFilter = 'Pending'; state.reviewScope = 'all'; state.reviewRisk = 'All'; state.reviewSearch = ''; state.selectedReviewId = 'span:' + id; render(); break;
+    case 'revisions': if (state.recording) { toast('Stop the capture preview before generating document revisions.'); break; } openModal('revisions'); break;
+    case 'revision-mode': state.revisionMode = value; renderModal(); break;
+    case 'generate-revision': { const result = createRevision(state, state.revisionMode); closeModal(); if (result.draft) { state.documentMode = 'derived'; state.page = 'studio'; render(); toast(`Created a separate editorial draft with ${result.draft.changed} fixture rewrites.`); } else { state.reviewScope = state.dictationId; state.reviewFilter = 'Pending'; state.reviewRisk = 'All'; state.reviewSearch = ''; state.page = 'review'; render(); toast(`${result.proposals} ${result.mode} proposals available for review.`); } break; }
+    case 'open-derived': state.selectedDerivedId = id; state.documentMode = 'derived'; state.page = 'studio'; closeModal(); render(); break;
+    case 'provenance': state.selectedBlockId = id; openModal('provenance'); break;
     case 'settings': openModal('settings', el.dataset.settingsTab); break;
     case 'settings-tab': state.settingsTab = value; renderModal(); break;
     case 'theme': state.settings.theme = value; render(); modalRoot.querySelector(`[data-action=theme][data-value=${value}]`)?.focus(); break;
@@ -171,10 +187,10 @@ function action(name, el) {
     case 'document-mode': state.documentMode = value; render(); break;
     case 'find': state.findOpen = !state.findOpen; if (!state.findOpen) state.findQuery = ''; render(); if (state.findOpen) root.querySelector('#document-find')?.focus(); break;
     case 'focus': state.focusMode = !state.focusMode; if (state.focusMode) state.inspectorOpen = false; render(); break;
-    case 'select-block': { const b = currentBlocks(state).find(b => b.id === id); state.selectedBlockId = id; if (b) state.position = b.start; const change = state.changes.find(c => c.blockId === id && c.state === 'pending'); showInspector(change ? 'changes' : 'recognition'); if (!change && b) state.requestId = state.requests.find(q => q.dictationId === state.dictationId && q.input[0] <= b.start && q.input[1] >= b.start)?.id || state.requestId; render(); scrollToBlock(id); break; }
+    case 'select-block': { const b = (state.documentMode === 'derived' ? currentDerived(state)?.blocks || [] : currentBlocks(state)).find(b => b.id === id); state.selectedBlockId = id; if (b) state.position = b.start; const change = state.changes.find(c => c.blockId === id && c.state === 'pending'); showInspector(change ? 'changes' : 'recognition'); if (!change && b) state.requestId = state.requests.find(q => q.dictationId === state.dictationId && q.input[0] <= b.start && q.input[1] >= b.start)?.id || state.requestId; render(); scrollToBlock(id); break; }
     case 'accept-change': { const result = applyChange(state, id); render(); toast(result.ok ? 'Correction accepted. The original evidence is preserved.' : result.reason); break; }
-    case 'dismiss-change': { snapshotEdit(state); const c = state.changes.find(c => c.id === id); c.state = 'dismissed'; render(); toast('Kept your original wording.'); break; }
-    case 'undo': if (undoEdit(state)) { render(); toast('Last document change undone.'); } else toast('No document edits to undo.'); break;
+    case 'dismiss-change': { const c = state.changes.find(c => c.id === id); if (!c || c.state !== 'pending') break; snapshotEdit(state, c.dictationId); c.state = 'dismissed'; journal(state, c.dictationId, 'Revision review', 'Kept current text', c.title, { proposalId: id }); render(); toast('Kept your original wording.'); break; }
+    case 'undo': if (state.documentMode !== 'working') { toast('Switch to the working document to undo its changes.'); break; } if (undoEdit(state)) { render(); toast('Last document change undone.'); } else toast('No document edits to undo.'); break;
     case 'change-filter': state.changeFilter = value; render(); break;
     case 'evidence': { state.requestId = id; state.requestTab = 'details'; showInspector('recognition'); const r = state.requests.find(q => q.id === id); state.position = r.input[0]; render(); break; }
     case 'request-tab': state.requestTab = value; render(); break;
@@ -214,20 +230,24 @@ document.addEventListener('click', ev => {
 });
 
 document.addEventListener('focusin', ev => { if (ev.target.matches('[data-edit-block][contenteditable]')) { ev.target.dataset.before = ev.target.textContent; ev.target.dataset.snapshotted = ''; } });
+document.addEventListener('focusout', ev => { const el = ev.target; if (el.matches('[data-edit-block][contenteditable]') && el.dataset.snapshotted && el.dataset.before !== el.textContent) { if (state.documentMode === 'derived') journal(state, state.dictationId, 'Derived draft edit', 'Applied', `Edited ${el.dataset.editBlock} in ${currentDerived(state)?.name}.`); else recordManualRevision(state, state.dictationId, el.dataset.editBlock); el.dataset.snapshotted = ''; } });
 document.addEventListener('input', ev => {
   const el = ev.target;
   if (['attempt-before', 'attempt-after'].includes(el.id)) { updateRetryPreview(); }
   else if (el.id === 'job-search') { const pos = el.selectionStart; state.jobQuery = el.value; const jobs = visibleJobs(state); if (!jobs.some(j => j.id === state.selectedJobId)) selectJob(state, jobs[0]?.id); render(); const next = root.querySelector('#job-search'); next.focus(); next.setSelectionRange(pos, pos); }
+  else if (el.id === 'review-search') { const pos = el.selectionStart; state.reviewSearch = el.value; render(); const next = root.querySelector('#review-search'); next.focus(); next.setSelectionRange(pos, pos); }
   else if (el.id === 'library-search') { const pos = el.selectionStart; state.libraryQuery = el.value; render(); const next = root.querySelector('#library-search'); next.focus(); next.setSelectionRange(pos, pos); }
   else if (el.id === 'document-find') { const pos = el.selectionStart; state.findQuery = el.value; render(); const next = root.querySelector('#document-find'); next.focus(); next.setSelectionRange(pos, pos); }
   else if (el.matches('[data-edit-block][contenteditable]')) {
-    const block = currentBlocks(state).find(b => b.id === el.dataset.editBlock); if (!block) return;
-    if (!el.dataset.snapshotted) { snapshotEdit(state); el.dataset.snapshotted = 'yes'; }
-    block.text = el.textContent; state.editedBlocks.add(block.id); state.version++;
-    el.closest('.text-block').classList.add('human-edited');
-    root.querySelector('#save-status').textContent = 'Edited locally · protected from machine changes';
-    root.querySelector('#word-count').textContent = wordCount(currentBlocks(state)) + ' words';
-    const undo = root.querySelector('[data-action=undo]'); if (undo) undo.disabled = false;
+    const derived = state.documentMode === 'derived' ? currentDerived(state) : null;
+    const blocks = derived ? derived.blocks : currentBlocks(state), block = blocks.find(b => b.id === el.dataset.editBlock); if (!block) return;
+    if (!el.dataset.snapshotted) { if (!derived) snapshotEdit(state); el.dataset.snapshotted = 'yes'; }
+    block.text = el.textContent;
+    if (derived) { block.provenance = { ...block.provenance, kind: 'Editorial draft · human edit' }; derived.edited = true; }
+    else { state.editedBlocks.add(block.id); state.version++; const version = root.querySelector('.paper-footer span:nth-child(2)'); if (version) version.textContent = 'Version ' + state.version; el.closest('.text-block').classList.add('human-edited'); }
+    root.querySelector('#save-status').textContent = derived ? 'Derived draft edited locally' : 'Edited locally · protected from machine changes';
+    root.querySelector('#word-count').textContent = wordCount(blocks) + ' words';
+    const undo = root.querySelector('[data-action=undo]'); if (undo && !derived) undo.disabled = false;
   }
 });
 document.addEventListener('change', ev => {
@@ -235,6 +255,8 @@ document.addEventListener('change', ev => {
   if (el.dataset.compareSide) { const spanId = el.dataset.span; const pair = comparisonPair(state, spanId).map(a => a?.id || ''); const side = el.dataset.compareSide === 'left' ? 0 : 1; if (pair[1 - side] === el.value) pair[1 - side] = pair[side]; pair[side] = el.value; state.comparisons[spanId] = pair; render(); }
   else if (el.id === 'comparison-span') { selectSpan(state, el.value); state.activityTab = 'compare'; render(); }
   else if (el.id === 'attempt-audio') { modalRoot.querySelector('#attempt-padding').hidden = el.value !== 'custom'; updateRetryPreview(); }
+  else if (el.dataset.reviewSetting) { state[el.dataset.reviewSetting] = el.value; render(); }
+  else if (el.id === 'assembly-scope') { state.assemblyMode = el.value; }
   else if (el.dataset.activitySetting) { state[el.dataset.activitySetting] = el.value; if (['jobFilter', 'jobDictationFilter'].includes(el.dataset.activitySetting)) { const jobs = visibleJobs(state); if (!jobs.some(j => j.id === state.selectedJobId)) selectJob(state, jobs[0]?.id); } render(); }
   else if (el.id === 'job-dictation') { modalRoot.querySelector('#job-end').value = state.dictations.find(d => d.id === el.value).duration; }
   else if (el.id === 'job-plan') { modalRoot.querySelector('#job-parts').disabled = el.value === 'single'; }
@@ -255,11 +277,11 @@ document.addEventListener('keydown', ev => {
     return;
   }
   const editing = ev.target.matches('input,textarea,select,[contenteditable]');
-  if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === 'f') { ev.preventDefault(); if (!state.findOpen) action('find'); else root.querySelector('#document-find')?.focus(); return; }
-  if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === 'z' && !editing) { ev.preventDefault(); action('undo'); return; }
+  if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === 'f') { ev.preventDefault(); if (['jobs', 'review'].includes(state.page)) root.querySelector(state.page === 'jobs' ? '#job-search' : '#review-search')?.focus(); else if (!state.findOpen) action('find'); else root.querySelector('#document-find')?.focus(); return; }
+  if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === 'z' && !editing && state.page === 'studio') { ev.preventDefault(); action('undo'); return; }
   if (editing) return;
   if (ev.target.id === 'waveform' && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(ev.key)) { ev.preventDefault(); setPosition(ev.key === 'Home' ? 0 : ev.key === 'End' ? currentDictation(state).duration : state.position + (ev.key === 'ArrowLeft' ? -5 : 5)); return; }
-  if (state.page === 'jobs') { if (ev.key === 'Escape') { state.activityInspectorOpen = false; render(); } return; }
+  if (['jobs', 'review'].includes(state.page)) { if (ev.key === 'Escape') { state.activityInspectorOpen = false; render(); } return; }
   const shortcuts = { ' ': 'play', r: 'record', m: 'marker', j: 'skip-back', l: 'skip-forward' };
   if (shortcuts[ev.key.toLowerCase()]) { ev.preventDefault(); action(shortcuts[ev.key.toLowerCase()]); }
   else if (ev.key === 'Escape') { state.activityInspectorOpen = false; state.inspectorOpen = false; state.sidebarOpen = false; render(); }

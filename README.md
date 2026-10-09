@@ -20,12 +20,17 @@ Open http://localhost:4173. Serve `dist/` with any static web server for deploym
 - **Attempt**: one execution for a job/span, with its own status, model, blob, frozen context, response, error, and execution order.
 - **Blob**: prepared audio input. The window can include evidence before and after the target and overlap other windows. A retry can reuse a blob or prepare a wider one.
 
-Activity opens by default with a job browser, execution tables, and a side inspector (a drawer on narrower screens). The political-report fixture has four jobs, including independent comparison and text-processing jobs. The main ASR job demonstrates out-of-order completion, a recovered retry, three failed attempts on one span, an in-flight attempt, a dependency-blocked span, and unattempted work. A comparison job references the same failed span with a different model.
+Semantic review opens by default. Activity provides a job browser, execution tables, and a side inspector (a drawer on narrower screens). The political-report fixture has five jobs, including independent comparison and text-processing jobs. The main ASR job demonstrates out-of-order completion, a recovered retry, three failed attempts on one span, an in-flight attempt, a dependency-blocked span, and unattempted work. A comparison job references the same failed span with a different model.
 
 Target coverage uses the union of successful target intervals within the selected job. Transmitted duration sums submitted attempt windows, including context overlap and retries. Success stores evidence; it does not apply text to the document.
 
 ## Explore
 
+- Assemble explicitly mapped target text in audio order. Overlapping input-window context is excluded; unmapped results and conflicting hypotheses remain blocked. Fill gaps or preview replacements; apply passages individually or apply ready passages.
+- Use the briefing assembly fixture to inspect out-of-order completion, overlapping input windows, a missing document section, and a competing attribution/amount/date hypothesis.
+- Review changes in a dedicated semantic queue with dictation, status, and risk filters. Negation, attribution, numbers, dates, and qualifications receive higher heuristic priority. Each candidate links to its independent attempt.
+- Separate recognition repair, cleanup, and editorial revision. Repair and cleanup create guarded proposals; editorial revision creates a separately editable/exportable draft with frozen input context and a source version.
+- Inspect passage provenance, per-dictation revision history, and an application journal. Undo affects only the current dictation; document versions remain monotonic. New recognition evidence reopens a prior disagreement decision.
 - Filter jobs by dictation/status or search by ID; inspect spans, attempts, execution events, and configuration.
 - Compare attempts across jobs for a shared span, inspect word differences, and record preferred evidence independently of document editing. The comparison shows whether model, input blob, and context snapshot match.
 - Configure a new attempt’s ASR model, exact reused blob or custom evidence padding, and original/current context snapshot.
@@ -50,6 +55,10 @@ The interface marks itself as a mock-up. Recording, playback, import processing,
 dist/
   fixtures/demo-data.js  # Sample dictations, transcripts, waveforms, model cards
   fixtures/activity-data.js # Job/span/attempt/blob/context fixtures and responses
+  fixtures/revision-data.js # Assembly target mappings and mode-specific revision examples
+  src/document-state.js # Per-dictation versions, undo, provenance, application journal
+  src/revision-store.js # Target assembly, semantic review, derived document logic
+  src/revision-view.js  # Review console and revision/provenance dialogs
   src/activity-store.js # Job lifecycle, retries, union coverage, frozen context
   src/activity-view.js  # Job browser, span/attempt tables, evidence inspector
   src/comparison-view.js # Cross-job comparisons and attempt configuration
@@ -75,4 +84,4 @@ npm run check
 npm test
 ```
 
-Tests cover comparison provenance, negation differences, preferred-evidence protection, dictation/document coverage separation, concurrency-aware dispatch, custom-window validation, domain references, shared spans, overlap-safe coverage, independent retries, frozen context, dependency blocking, cancellation, job creation, evidence preservation, undo, protection of human edits, stale proposals, per-dictation context isolation, context compilation, model/strategy compatibility, HTML escaping, and rendering across inspector/dialog states. This implementation was checked without an interactive browser QA pass.
+Tests cover overlap-safe assembly, target mapping, stale-version guards, conflicting hypotheses, isolated undo and editorial drafts, semantic review priority, comparison provenance, negation differences, preferred-evidence protection, dictation/document coverage separation, concurrency-aware dispatch, custom-window validation, domain references, shared spans, overlap-safe coverage, independent retries, frozen context, dependency blocking, cancellation, job creation, evidence preservation, undo, protection of human edits, stale proposals, per-dictation context isolation, context compilation, model/strategy compatibility, HTML escaping, and rendering across inspector/dialog states. This implementation was checked without an interactive browser QA pass.
